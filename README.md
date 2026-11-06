@@ -60,7 +60,8 @@ with mode `600`.
 | `starkeep show-state` | Raw `state.json` (debugging) |
 
 All commands accept `--config-dir /path/to/dir` (default: current directory).
-`run` and `dry-run` also accept `--cap N` for a one-off smoke test.
+`run` and `dry-run` also accept `--cap N`; `run --cap 0` is a decide-only pass
+(promote/expire without downloading anything).
 
 ## How "star to keep" works
 

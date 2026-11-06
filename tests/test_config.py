@@ -37,6 +37,12 @@ def test_empty_paths_are_reported(cfg):
     assert any("log_dir" in p for p in problems)
 
 
+def test_dry_run_does_not_require_lastfm(cfg):
+    bad = replace(cfg, lastfm_api_key="", lastfm_user="")
+    assert any("Last.fm" in p for p in config_mod.validate(bad))
+    assert config_mod.validate(bad, require_lastfm=False) == []
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 def test_saved_config_is_private(tmp_path, cfg):
     config_mod.save(tmp_path, cfg)

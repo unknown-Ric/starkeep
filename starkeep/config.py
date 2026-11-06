@@ -100,13 +100,14 @@ def save(directory: str | Path, cfg: Config) -> None:
         pass
 
 
-def validate(cfg: Config) -> list[str]:
+def validate(cfg: Config, require_lastfm: bool = True) -> list[str]:
     """Return a list of human-readable problems (empty = OK)."""
     problems: list[str] = []
-    if not cfg.lastfm_api_key:
-        problems.append("Last.fm API key missing — set the LASTFM_API_KEY env var")
-    if not cfg.lastfm_user:
-        problems.append("lastfm_user is not set")
+    if require_lastfm:
+        if not cfg.lastfm_api_key:
+            problems.append("Last.fm API key missing — set the LASTFM_API_KEY env var")
+        if not cfg.lastfm_user:
+            problems.append("lastfm_user is not set")
     for name in ("subsonic_url", "subsonic_user", "subsonic_password"):
         if not getattr(cfg, name):
             problems.append(f"{name} is not set")
@@ -114,8 +115,8 @@ def validate(cfg: Config) -> list[str]:
         if not getattr(cfg, name):
             problems.append(f"{name} is not set")
 
-    if cfg.cap < 1:
-        problems.append("cap must be >= 1")
+    if cfg.cap < 0:
+        problems.append("cap must be >= 0 (0 = decide-only run)")
     if cfg.expiry_days < 1:
         problems.append("expiry_days must be >= 1")
     if cfg.similar_per_seed < 1:

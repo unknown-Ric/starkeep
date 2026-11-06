@@ -112,7 +112,7 @@ def promote_file(cfg: Config, src: Path, artist: str, title: str,
     return str(dst)
 
 
-def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient, stt: dict,
+def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict,
            dry_run: bool = False, now: dt.datetime | None = None) -> dict:
     """The keep/expire pass: read stars from Subsonic, act on incoming files."""
     starred = sub.starred_songs()

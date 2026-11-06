@@ -33,9 +33,7 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
     setup_logging(cfg)
     with st.StateLock(cfg.state_file):  # prevent overlapping cron runs
         stt = st.load(cfg.state_file)
-        if not cfg.lastfm_api_key:
-            raise RuntimeError("Last.fm API key missing — set LASTFM_API_KEY")
-        lfm = LastfmClient(cfg.lastfm_api_key, cfg.lastfm_user)
+        lfm = LastfmClient(cfg.lastfm_api_key, cfg.lastfm_user) if cfg.lastfm_api_key else None
         sub = SubsonicClient(cfg.subsonic_url, cfg.subsonic_user, cfg.subsonic_password)
         sub.ping()
         stt["last_run"] = st.utcnow()
@@ -48,6 +46,9 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
             result = decide.decide(cfg, sub, lfm, stt, dry_run=True)
             result["orphans"] = report["orphans"]
             return result
+
+        if lfm is None:
+            raise RuntimeError("Last.fm API key missing — set LASTFM_API_KEY")
 
         if report["missing"]:
             reconcile.apply_missing(stt, report["missing"])

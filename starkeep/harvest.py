@@ -25,6 +25,8 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
     if not seeds:
         log.warning("no recent scrobbles — harvest produced nothing (run skipped safely)")
         return []
+    if cfg.cap <= 0:  # --cap 0 = decide-only smoke run
+        return []
 
     proposed: list[tuple[str, str]] = []
     for artist, title in seeds[:10]:

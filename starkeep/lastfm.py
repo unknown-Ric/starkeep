@@ -82,4 +82,7 @@ class LastfmClient:
 
 
 def _fmt(o: object) -> str:
-    return o["#text"] if isinstance(o, dict) else str(o)  # type: ignore[index]
+    """Last.fm returns artist as {#text: ...} in scrobbles but {name: ...} elsewhere."""
+    if isinstance(o, dict):
+        return o.get("#text") or o.get("name") or ""
+    return str(o)

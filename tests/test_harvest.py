@@ -57,3 +57,12 @@ def test_harvest_never_retries_after_max_strikes(cfg):
 def test_harvest_with_no_scrobbles_is_safe(cfg):
     stt = st.load(cfg.state_file)
     assert harvest.harvest(cfg, FakeLastfm(), FakeSubsonic(), stt) == []
+
+
+def test_cap_zero_is_decide_only(cfg):
+    lfm = FakeLastfm(seeds=[("Seed", "Song")], similar=[("A", "One")])
+    cfg = cfg.__class__(**{**cfg.__dict__, "cap": 0})
+    stt = st.load(cfg.state_file)
+
+    assert harvest.harvest(cfg, lfm, FakeSubsonic(), stt) == []
+    assert stt["candidates"] == []

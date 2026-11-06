@@ -144,7 +144,7 @@ def main() -> None:
         sys.exit(doctor(cfg))
     if args.cmd in ("run", "dry-run"):
         config_mod.ensure_dirs(cfg)
-        problems = config_mod.validate(cfg)
+        problems = config_mod.validate(cfg, require_lastfm=(args.cmd == "run"))
         if problems:
             print("config problems (run `starkeep doctor` for details):")
             for problem in problems:
