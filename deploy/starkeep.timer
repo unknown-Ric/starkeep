@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly starkeep music discovery run
+
+[Timer]
+# Monday morning, off-peak. RandomizedDelaySec spreads out shared hosts.
+OnCalendar=Mon 04:17
+RandomizedDelaySec=15min
+# If the machine was off, run once after boot instead of skipping the week.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

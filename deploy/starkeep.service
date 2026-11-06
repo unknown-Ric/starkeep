@@ -1,0 +1,21 @@
+[Unit]
+Description=starkeep music discovery run
+Documentation=https://github.com/unknown-Ric/starkeep
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Must be a user that can write incoming_dir and library_dir, and read config.yaml.
+User=starkeep
+Group=starkeep
+WorkingDirectory=/etc/starkeep
+# Holds LASTFM_API_KEY=... (chmod 600). "-" makes the file optional.
+EnvironmentFile=-/etc/starkeep.env
+# Adjust to your install: pipx puts it in ~/.local/bin/starkeep.
+ExecStart=/usr/local/bin/starkeep run
+# One retry an hour later on failure; a broken download should not abort the week.
+Restart=on-failure
+RestartSec=1h
+# If the whole run is wedged (yt-dlp hang), stop it rather than pile up.
+TimeoutStartSec=6h

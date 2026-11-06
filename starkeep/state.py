@@ -1,38 +1,55 @@
 """Crash-safe, atomic state file.
 
 Invariants (documented in README, do not break):
-- Every download/promotion/deletion is recorded here BEFORE the action and
-  confirmed after; deletions only ever happen for paths present in this state.
+- Every download/promotion/deletion is recorded here BEFORE/AS the action happens;
+  deletions only ever happen for paths present in this state.
 - Writes are atomic (tmp file + os.replace).
-- A simple lockfile prevents overlapping cron runs from stomping each other.
+- A lockfile prevents overlapping cron runs from stomping each other.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import fcntl  # POSIX only; see lock note below
 import json
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows dev machines
+    fcntl = None  # type: ignore[assignment]
+
+if os.name == "nt":  # pragma: no cover - Windows dev machines
+    import msvcrt
+
 STATE_VERSION = 1
+
+# Candidate lifecycle:
+#   queued -> downloaded -> promoted | expired
+#   queued -> failed (strike) -> queued (retry) -> failed ... or promoted/expired
+#   skipped-owned: already in the library, never downloaded
+#   missing: file vanished from incoming/ (never deleted by us)
+TERMINAL_STATUSES = {"promoted", "expired", "skipped-owned"}
 
 
 def _empty() -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
         "last_run": None,
-        "candidates": [],  # {artist,title,source,status,added_at,file_path,strikes,downloaded_at}
+        "candidates": [],  # artist,title,status,added_at,added_run,file_path,strikes,downloaded_at
         "moved": [],
         "deleted": [],
     }
 
 
 class StateLock:
-    """Exclusive lock around a state file. Uses fcntl on POSIX; on platforms
-    without fcntl falls back to a best-effort check (cron overlap is rare)."""
+    """Exclusive lock around a state file (fcntl on POSIX, msvcrt on Windows).
+
+    The lock file is intentionally kept around: unlinking it while another
+    process waits would let two processes lock different inodes.
+    """
 
     def __init__(self, state_path: str) -> None:
         self.lock_path = Path(state_path).with_suffix(".lock")
@@ -40,9 +57,13 @@ class StateLock:
 
     def __enter__(self) -> "StateLock":
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self.lock_path, "w")
+        self._fh = open(self.lock_path, "a+")
         try:
-            fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if fcntl is not None:
+                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as e:
             self._fh.close()
             raise RuntimeError("another starkeep run seems active (lockfile held)") from e
@@ -50,20 +71,32 @@ class StateLock:
 
     def __exit__(self, *exc: Any) -> None:
         try:
-            fcntl.flock(self._fh, fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+            else:
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
             self._fh.close()
-        self.lock_path.unlink(missing_ok=True)
 
 
 def utcnow() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return utcnow_dt().isoformat(timespec="seconds")
 
 
-def days_since(iso: str | None) -> float:
+def utcnow_dt() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def days_since(iso: str | None, now: dt.datetime | None = None) -> float:
+    """Age in (fractional) days; +inf when the timestamp is absent."""
     if not iso:
         return float("inf")
-    return (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(iso)).days
+    t = dt.datetime.fromisoformat(iso)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.timezone.utc)
+    now = now or utcnow_dt()
+    return (now - t).total_seconds() / 86400.0
 
 
 def load(state_path: str) -> dict[str, Any]:
@@ -73,6 +106,7 @@ def load(state_path: str) -> dict[str, Any]:
         st["path"] = state_path
         return st
     st = json.loads(p.read_text(encoding="utf-8"))
+    st.setdefault("version", STATE_VERSION)
     st.setdefault("candidates", [])
     st.setdefault("moved", [])
     st.setdefault("deleted", [])
@@ -99,7 +133,7 @@ def save(state_path: str, st: dict[str, Any]) -> None:
 # ---- candidate helpers --------------------------------------------------
 
 def candidate_key(artist: str, title: str) -> tuple[str, str]:
-    return (artist.strip().lower(), title.strip().lower())
+    return (artist.strip().casefold(), title.strip().casefold())
 
 
 def find_candidate(st: dict, artist: str, title: str) -> dict | None:
@@ -114,7 +148,7 @@ def add_candidate(st: dict, artist: str, title: str, status: str, **extra: Any) 
     c = {
         "artist": artist,
         "title": title,
-        "status": status,  # queued | downloaded | failed | uploaded
+        "status": status,
         "added_at": utcnow(),
         "added_run": st.get("last_run"),
         "file_path": None,
@@ -128,13 +162,30 @@ def add_candidate(st: dict, artist: str, title: str, status: str, **extra: Any) 
 def strike(st: dict, artist: str, title: str) -> None:
     c = find_candidate(st, artist, title)
     if c:
-        c["strikes"] += 1
+        c["strikes"] = int(c.get("strikes", 0)) + 1
         c["status"] = "failed"
 
 
-def is_retryable(st: dict, artist: str, title: str, max_strikes: int = 2) -> bool:
-    """A candidate that already failed enough times must never be retried."""
+def queue_decision(st: dict, artist: str, title: str, max_strikes: int = 2) -> str:
+    """What should harvest do with this candidate?
+
+    new     : never seen -> check library, then queue
+    retry   : a previous failure/missing file below the strike limit -> queue again
+    requeue : was queued when a run crashed -> keep it queued
+    skip    : downloaded/promoted/expired/owned, or out of strikes
+    """
     c = find_candidate(st, artist, title)
-    if c and not (c["status"] == "queued" and c["strikes"] < max_strikes):
-        return False
-    return True
+    if c is None:
+        return "new"
+    status = c.get("status")
+    strikes = int(c.get("strikes", 0))
+    if status == "queued":
+        return "requeue"
+    if status in ("failed", "missing") and strikes < max_strikes:
+        return "retry"
+    return "skip"
+
+
+def is_retryable(st: dict, artist: str, title: str, max_strikes: int = 2) -> bool:
+    """Kept for readability at call sites; expired/promoted tracks never return."""
+    return queue_decision(st, artist, title, max_strikes) != "skip"

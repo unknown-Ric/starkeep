@@ -15,8 +15,14 @@ dependencies = [
     "mutagen>=1.47",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 starkeep = "starkeep.cli:main"
 
 [tool.setuptools]
 packages = ["starkeep"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
