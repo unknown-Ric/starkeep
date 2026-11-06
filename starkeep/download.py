@@ -78,6 +78,15 @@ def apply_basic_tags(path: Path, artist: str, title: str) -> bool:
         return False
 
 
+def _existing_file(incoming: Path, stem: str) -> Path | None:
+    """A finished file from an interrupted run (yt-dlp renames .part only when done)."""
+    matches = [
+        p for p in incoming.glob(f"{stem}.*")
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in AUDIO_EXTS
+    ]
+    return max(matches, key=lambda p: p.stat().st_mtime) if matches else None
+
+
 def download(cfg: Config, artist: str, title: str) -> Path:
     """Download exactly one track into incoming/. Returns the file actually written."""
     if not YTDLP:
@@ -85,6 +94,12 @@ def download(cfg: Config, artist: str, title: str) -> Path:
     incoming = Path(cfg.incoming_dir)
     incoming.mkdir(parents=True, exist_ok=True)
     stem = f"{safe_name(artist)} - {safe_name(title)}"
+
+    existing = _existing_file(incoming, stem)
+    if existing is not None:
+        log.info("already downloaded, adopting: %s", existing.name)
+        return existing
+
     before = {p for p in incoming.iterdir() if p.is_file()}
     report = incoming / f".starkeep-{uuid.uuid4().hex}.path"
 

@@ -88,3 +88,19 @@ def test_status_strike_on_download_failure(cfg, monkeypatch):
     c = st.find_candidate(stt, "Artist", "Title")
     assert c["status"] == "failed"
     assert c["strikes"] == 1
+
+
+def test_complete_file_from_interrupted_run_is_adopted(cfg, monkeypatch):
+    """yt-dlp renames .part only when finished, so a matching file is complete."""
+    incoming = Path(cfg.incoming_dir)
+    incoming.mkdir(parents=True)
+    leftover = incoming / "Artist - Title.m4a"
+    leftover.write_bytes(b"complete audio")
+
+    monkeypatch.setattr(download, "YTDLP", "yt-dlp")
+
+    def must_not_run(*a, **k):
+        raise AssertionError("yt-dlp should not be called for an existing file")
+
+    monkeypatch.setattr(download.subprocess, "run", must_not_run)
+    assert download.download(cfg, "Artist", "Title") == leftover

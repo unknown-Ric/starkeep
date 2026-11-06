@@ -6,6 +6,7 @@ import argparse
 import json
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from . import config as config_mod
@@ -119,8 +120,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="starkeep", description=__doc__)
     ap.add_argument("--config-dir", default=".", help="directory holding config.yaml")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run", help="full pipeline (reconcile, decide, harvest, download)")
-    sub.add_parser("dry-run", help="show what promote/delete would do, touch nothing")
+    run_p = sub.add_parser("run", help="full pipeline (reconcile, decide, harvest, download)")
+    run_p.add_argument("--cap", type=int, default=None,
+                       help="override config cap for this run (smoke tests)")
+    dry_p = sub.add_parser("dry-run", help="show what promote/delete would do, touch nothing")
+    dry_p.add_argument("--cap", type=int, default=None, help="override config cap")
     sub.add_parser("status", help="summary of last run from state.json")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
@@ -128,6 +132,8 @@ def main() -> None:
 
     cfg = config_mod.load(args.config_dir) or config_mod.first_run_setup(args.config_dir)
     cfg = cfg.with_api_key()
+    if getattr(args, "cap", None) is not None:
+        cfg = replace(cfg, cap=args.cap)
 
     if args.cmd == "status":
         sys.exit(status(cfg))
