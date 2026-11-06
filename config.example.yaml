@@ -1,0 +1,27 @@
+# starkeep configuration. Copied/local version is auto-created by the first-run
+# setup (`starkeep doctor`); this file documents every key. Your real config.yaml
+# is gitignored — never commit credentials.
+
+# Last.fm
+lastfm_user: ""            # scrobble history is read from this user
+lastfm_api_key: ""         # prefer LASTFM_API_KEY env var instead of storing here
+
+# Subsonic / Navidrome
+subsonic_url: "http://localhost:4533"
+subsonic_user: ""
+subsonic_password: ""
+# subsonic_password_md5: not supported; token auth is computed per-request.
+
+# Paths (absolute)
+incoming_dir: ""           # audition folder; ONLY place downloads land
+library_dir: ""            # promote target root; only ever added to
+state_file: ""             # e.g. /var/lib/starkeep/state.json
+log_dir: ""
+
+# Behavior
+cap: 30                    # candidates per weekly run
+expiry_days: 14            # unstarred orphan lifetime in incoming/
+similar_per_seed: 3        # similar tracks per seed (scrobbled) track
+max_strikes: 2             # download failures before a candidate is abandoned
+downloader: "ytdlp"        # only 'ytdlp' in v1
+audio_format: "m4a"

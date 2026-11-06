@@ -1,0 +1,9 @@
+starkeep-plan.md
+state.json
+config.yaml
+*.log
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
