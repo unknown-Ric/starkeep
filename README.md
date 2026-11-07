@@ -1,5 +1,9 @@
 # starkeep
 
+<div align="center">
+  <img src="starkeep-logo.svg" alt="starkeep logo" width="160">
+</div>
+
 > Cron-powered music discovery for [Navidrome](https://navidrome.org) (or any
 > Subsonic-compatible server): Last.fm-backed candidates are downloaded into an
 > audition folder, **star a track to keep it in your library**, everything else
