@@ -10,6 +10,9 @@ import uuid
 from pathlib import Path
 
 import mutagen
+import mutagen.id3
+import mutagen.mp4
+import requests
 
 from . import state as st
 from .config import Config
@@ -78,6 +81,86 @@ def apply_basic_tags(path: Path, artist: str, title: str) -> bool:
         return False
 
 
+def apply_full_tags(path: Path, artist: str, title: str, lfm) -> bool:
+    """Full tags BEFORE the audition week: real artist/title/album/track# plus
+    album art (Deezer high-res -> Last.fm album image), falling back to the
+    yt-dlp thumbnail when both lookups miss. Never fatal: the download is kept.
+    """
+    if not apply_basic_tags(path, artist, title):
+        return False
+    try:
+        info = (lfm.track_album_info(artist, title) if lfm else None) or {}
+        m = mutagen.File(path, easy=True)
+        if m is not None:
+            if info.get("album"):
+                m["album"] = info["album"]
+            if info.get("track_number"):
+                m["tracknumber"] = str(info["track_number"])
+            m.save()
+        url = _deezer_cover_url(artist, title) or info.get("image")
+        if not url:
+            return True  # thumbnail embedded by yt-dlp stays
+        jpg = requests.get(url, timeout=60)
+        jpg.raise_for_status()
+        _embed_cover(path, jpg.content)
+        return True
+    except Exception as e:  # enrichment must not kill download bookkeeping
+        log.warning("full tags failed for %s: %s", path.name, e)
+        return False
+
+
+DEEZER_API = "https://api.deezer.com/search/track"
+
+
+def _norm(text: str | None) -> str:
+    return " ".join((text or "").casefold().split())
+
+
+def _pick_deezer(results: list, artist: str, title: str) -> str | None:
+    """Deezer cover_xl (1000px) for an exact artist+title match only.
+    Wrong-track art is worse than the YouTube thumbnail we already have,
+    so a loose search win is not trusted on its own."""
+    a, t = _norm(artist), _norm(title)
+    for r in results:
+        if (_norm((r.get("artist") or {}).get("name")) == a
+                and _norm(r.get("title")) == t):
+            return (r.get("album") or {}).get("cover_xl")
+    return None
+
+
+def _deezer_cover_url(artist: str, title: str) -> str | None:
+    try:
+        r = requests.get(DEEZER_API, params={"q": f"{artist} {title}", "limit": 5},
+                         timeout=30)
+        r.raise_for_status()
+        return _pick_deezer(r.json().get("data") or [], artist, title)
+    except Exception as e:
+        log.warning("Deezer cover lookup failed for %s - %s: %s", artist, title, e)
+        return None
+
+
+def _embed_cover(path: Path, data: bytes) -> bool:
+    """Embed JPEG bytes as artwork (MP4 + ID3; other containers keep the
+    yt-dlp thumbnail)."""
+    audio = mutagen.File(path)
+    if audio is None:
+        return False
+    try:
+        if isinstance(audio, mutagen.mp4.MP4):
+            audio["covr"] = [mutagen.mp4.MP4Cover(
+                data, imageformat=mutagen.mp4.MP4Cover.FORMAT_JPEG)]
+        elif isinstance(audio, mutagen.id3.ID3FileType):
+            audio.tags.add(mutagen.id3.APIC(encoding=3, mime="image/jpeg",
+                                            type=3, data=data))
+        else:
+            return False
+        audio.save()
+        return True
+    except Exception as e:
+        log.warning("could not embed cover in %s: %s", path.name, e)
+        return False
+
+
 def _existing_file(incoming: Path, stem: str) -> Path | None:
     """A finished file from an interrupted run (yt-dlp renames .part only when done)."""
     matches = [
@@ -124,14 +207,15 @@ def download(cfg: Config, artist: str, title: str) -> Path:
         report.unlink(missing_ok=True)
 
 
-def download_all(cfg: Config, candidates: list[dict], stt: dict) -> int:
+def download_all(cfg: Config, candidates: list[dict], stt: dict,
+                 lfm=None) -> int:
     """Serial downloads with strike bookkeeping. Returns count downloaded now."""
     ok = 0
     for cand in candidates:
         artist, title = cand["artist"], cand["title"]
         try:
             path = download(cfg, artist, title)
-            apply_basic_tags(path, artist, title)
+            apply_full_tags(path, artist, title, lfm)
             c = st.find_candidate(stt, artist, title)
             if c:
                 c["status"] = "downloaded"

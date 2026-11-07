@@ -56,6 +56,23 @@ def test_failed_download_raises(cfg, monkeypatch):
         raise AssertionError("expected RuntimeError")
 
 
+class _FakeEasy:
+    """Stand-in for easy-mode mutagen files (tests never have real audio)."""
+
+    def __init__(self):
+        self.tags = {}
+        self.saved = False
+
+    def __setitem__(self, key, value):
+        self.tags[key] = value
+
+    def get(self, key):
+        return self.tags.get(key)
+
+    def save(self):
+        self.saved = True
+
+
 def test_download_all_records_path_and_applies_tags(cfg, monkeypatch):
     monkeypatch.setattr(download, "YTDLP", "yt-dlp")
     monkeypatch.setattr(download.subprocess, "run", _fake_ytdlp)
@@ -125,3 +142,57 @@ def test_complete_file_from_interrupted_run_is_adopted(cfg, monkeypatch):
 
     monkeypatch.setattr(download.subprocess, "run", must_not_run)
     assert download.download(cfg, "Artist", "Title") == leftover
+
+
+def test_pick_deezer_requires_exact_artist_title_match():
+    results = [
+        {"artist": {"name": "Other Artist"}, "title": "Wrong Song",
+         "album": {"cover_xl": "http://wrong.jpg"}},
+        {"artist": {"name": "AC/DC"}, "title": "Back In Black",
+         "album": {"cover_xl": "http://right.jpg"}},
+    ]
+    assert download._pick_deezer(results, "AC/DC", "Back In Black ") == "http://right.jpg"
+    # A loose-search miss must never yield art for the wrong song.
+    assert download._pick_deezer(results[:1], "AC/DC", "Back In Black") is None
+
+
+def test_apply_full_tags_sets_album_tracknumber_and_cover(cfg, monkeypatch):
+    fake = _FakeEasy()
+    monkeypatch.setattr(download.mutagen, "File",
+                        lambda *a, **k: fake)
+    monkeypatch.setattr(
+        download, "_deezer_cover_url", lambda a, t: "http://art.jpg")
+    jpeg = bytes(range(256))  # bytes, not a real image (fake path never parses)
+    monkeypatch.setattr(download.requests, "get",
+                        lambda url, timeout: type("R", (), {
+                            "raise_for_status": lambda s: None,
+                            "content": jpeg})())
+    embedded = []
+    monkeypatch.setattr(download, "_embed_cover",
+                        lambda path, data: embedded.append(data) or True)
+
+    class FakeLfm:
+        def track_album_info(self, artist, title):
+            return {"album": "Back In Black", "track_number": 4}
+
+    assert download.apply_full_tags(Path("x.m4a"), "Artist", "Title", FakeLfm())
+    assert fake.tags["artist"] == "Artist"
+    assert fake.tags["title"] == "Title"
+    assert fake.tags["album"] == "Back In Black"
+    assert fake.tags["tracknumber"] == "4"
+    assert embedded == [jpeg]
+
+
+def test_apply_full_tags_without_lfm_degrades_to_basic_tags(cfg):
+    assert download.apply_full_tags(Path("nope.m4a"), "Artist", "Title", None) is False
+
+
+def test_download_all_passes_lfm_into_full_tags(cfg, monkeypatch):
+    monkeypatch.setattr(download, "YTDLP", "yt-dlp")
+    monkeypatch.setattr(download.subprocess, "run", _fake_ytdlp)
+    seen = {}
+    monkeypatch.setattr(download, "apply_full_tags",
+                        lambda path, artist, title, lfm: seen.setdefault("lfm", lfm) or True)
+    stt = st.load(cfg.state_file)
+    download.download_all(cfg, [{"artist": "Artist", "title": "Title"}], stt, lfm="LFM")
+    assert seen["lfm"] == "LFM"

@@ -59,7 +59,7 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
         decision = decide.decide(cfg, sub, lfm, stt)
 
         candidates = harvest.harvest(cfg, lfm, sub, stt)
-        downloaded = download.download_all(cfg, candidates, stt)
+        downloaded = download.download_all(cfg, candidates, stt, lfm)
         st.save(cfg.state_file, stt)
 
         log.info(

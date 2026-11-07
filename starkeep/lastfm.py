@@ -75,6 +75,12 @@ class LastfmClient:
                 out["album"] = album["title"]
             if album and album.get("@attr", {}).get("position"):
                 out["track_number"] = int(album["@attr"]["position"])
+            for size in ("mega", "extralarge"):
+                img = next((i.get("#text") for i in album.get("image") or []
+                            if isinstance(i, dict) and i.get("size") == size and i.get("#text")), None)
+                if img:
+                    out["image"] = img
+                    break
             return out or None
         except Exception as e:
             log.warning("track.getInfo failed for %s - %s: %s", artist, title, e)
