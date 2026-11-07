@@ -1,7 +1,7 @@
 [Unit]
 Description=starkeep music discovery run
 Documentation=https://github.com/unknown-Ric/starkeep
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
