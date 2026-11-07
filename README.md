@@ -53,7 +53,7 @@ with mode `600`.
 
 | Command | Purpose |
 |---|---|
-| `starkeep run` | Full pass: reconcile, promote/expire, harvest, download |
+| `starkeep run` | Full pass: reconcile, promote/expire, harvest, download, rebuild audition playlist |
 | `starkeep dry-run` | Show what would be promoted/deleted; touches nothing |
 | `starkeep status` | Last run, candidate counts, orphans in `incoming/` |
 | `starkeep doctor` | Validate config, connectivity, dependencies |
@@ -97,6 +97,8 @@ scan schedule (or trigger one from a hook) that runs after `starkeep run`.
   glob-delete anywhere in the code.
 - Your library is only ever **added to**. An existing target file is never
   overwritten; the audition copy is left to expire instead.
+- The one non-file write is the **`Starkeep Audition` playlist**, rebuilt each
+  run to mirror `incoming/` (delete + create). No other playlist is touched.
 - `state.json` is written atomically after every candidate transition. A crash
   loses at most the in-flight step, never the state file, and never causes a
   double-delete.
@@ -171,17 +173,18 @@ bias reduces but cannot eliminate bad matches.
 Yes; the pipeline is idempotent. Expiry is measured in days, not runs.
 
 **Does it work with Airsonic/other Subsonic servers?**
-The client only uses `ping`, `search3`, `getStarred2` (and `unstar`), which any
-Subsonic-compatible server should expose. Navidrome is the tested target.
+The client uses `ping`, `search3`, `getStarred2`, `unstar`, and
+`getPlaylists`/`createPlaylist`/`deletePlaylist` (audition playlist) — all
+standard Subsonic endpoints. Navidrome is the tested target.
 
 **Multiple users?**
 No. One config, one Navidrome user, one host — a personal-homelab tool.
 
 ## Roadmap
 
-Only if there is demand: read-only status page, MeTube as an alternative
-downloader, ListenBrainz seeds, multiple sources. No plans to become a Lidarr
-replacement or to manage whole albums.
+Only if there is demand: read-only status page, ntfy run notifications, MeTube
+as an alternative downloader, ListenBrainz seeds, multiple sources. No plans to
+become a Lidarr replacement or to manage whole albums.
 
 ## Development
 
