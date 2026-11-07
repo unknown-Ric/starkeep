@@ -69,9 +69,10 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
    `track.getSimilar`; results are deduped against your actual library
    (`search3`) and previously seen candidates, then capped.
 2. **Download** — `yt-dlp` fetches one match per candidate
-   (`ytsearch1:Artist - Title audio`) into `incoming/`. The file is retagged
-   immediately with the real artist/title, so Navidrome shows something
-   meaningful and stars can be matched back reliably.
+   (`ytsearch1:Artist - Title audio`) into `incoming/`. The video thumbnail is
+   embedded as cover art and the file is retagged immediately with the real
+   artist/title, so Navidrome shows something meaningful and stars can be
+   matched back reliably.
 3. **Audition** — listen in any Subsonic app. Star what you want to keep
    (offline stars sync later, e.g. when you get home).
 4. **Decide** — on the next run, starred tracks are promoted into

@@ -90,6 +90,27 @@ def test_status_strike_on_download_failure(cfg, monkeypatch):
     assert c["strikes"] == 1
 
 
+def test_download_embeds_thumbnail(cfg, monkeypatch):
+    seen = {}
+
+    def fake(cmd, capture_output=True, text=True, timeout=0):
+        seen["cmd"] = cmd
+        template = Path(cmd[cmd.index("-o") + 1])
+        written = Path(str(template).replace("%(ext)s", "m4a"))
+        written.write_bytes(b"audio")
+        report = Path(cmd[cmd.index("--print-to-file") + 2])
+        report.write_text(str(written), encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(download, "YTDLP", "yt-dlp")
+    monkeypatch.setattr(download.subprocess, "run", fake)
+
+    download.download(cfg, "Artist", "Title")
+
+    assert "--embed-thumbnail" in seen["cmd"]
+    assert "jpg" in seen["cmd"]
+
+
 def test_complete_file_from_interrupted_run_is_adopted(cfg, monkeypatch):
     """yt-dlp renames .part only when finished, so a matching file is complete."""
     incoming = Path(cfg.incoming_dir)

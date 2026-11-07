@@ -106,6 +106,7 @@ def download(cfg: Config, artist: str, title: str) -> Path:
     cmd = [
         YTDLP,
         "--extract-audio", "--audio-format", cfg.audio_format, "--audio-quality", "0",
+        "--embed-thumbnail", "--convert-thumbnails", "jpg",
         "-o", str(incoming / f"{stem}.%(ext)s"),
         "--no-playlist", "--quiet", "--no-warnings",
         "--print-to-file", "after_move:filepath", str(report),
