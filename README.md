@@ -74,7 +74,9 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
    Navidrome shows full info during the audition week and stars can be matched
    back reliably. Cover art: Deezer album art (1000px, exact artist+title match
    only) → Last.fm album image → the video thumbnail as last resort.
-3. **Audition** — listen in any Subsonic app. Star what you want to keep
+3. **Audition** — the **`Starkeep Audition`** playlist is rebuilt at the end of
+   every run to match `incoming/` exactly (promoted and expired tracks drop out
+   automatically). Listen in any Subsonic app and star what you want to keep
    (offline stars sync later, e.g. when you get home).
 4. **Decide** — on the next run, starred tracks are promoted into
    `<library>/<Artist>/<Album>/NN. Title` (or `<Artist>/Singles/`). Last.fm
@@ -129,8 +131,9 @@ Plain cron works too (the built-in lock makes overlaps harmless):
 
 ## Navidrome setup notes
 
-- Add `incoming_dir` to a scanned music folder. Many people use
-  `/music/_incoming` and a smart playlist / folder view for auditioning.
+- Add `incoming_dir` to a scanned music folder. Starkeep rebuilds a playlist
+  named `Starkeep Audition` (fixed name) at the end of every `run`; pin it in
+  your player and it is always your current audition list.
 - After promotion, a rescan is required before the new album appears.
 - Navidrome's scan may briefly show the audition copy and the promoted copy as
   two songs. They are the same file moved; a rescan reconciles it.

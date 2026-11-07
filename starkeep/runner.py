@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import datetime
 
-from . import decide, download, harvest, reconcile
+from . import decide, download, harvest, playlist, reconcile
 from . import state as st
 from .config import Config
 from .lastfm import LastfmClient
@@ -62,10 +62,17 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
         downloaded = download.download_all(cfg, candidates, stt, lfm)
         st.save(cfg.state_file, stt)
 
+        try:  # playlist must not fail the run's bookkeeping
+            pl = playlist.sync_audition(sub, stt)
+        except Exception as e:
+            log.warning("audition playlist sync failed: %s", e)
+            pl = {}
+
         log.info(
-            "run done: %d candidates, %d downloaded, %d promoted, %d deleted, %d orphans",
+            "run done: %d candidates, %d downloaded, %d promoted, %d deleted, %d orphans, playlist %s",
             len(candidates), downloaded, len(decision["keeps"]),
             len(decision["deletes"]), len(report["orphans"]),
+            pl.get("songs", "unchanged"),
         )
         return {
             "candidates": len(candidates),
@@ -73,4 +80,5 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
             "promoted": decision["keeps"],
             "expires": decision["deletes"],
             "orphans": report["orphans"],
+            "playlist": pl,
         }

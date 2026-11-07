@@ -23,7 +23,7 @@ class SubsonicClient:
         self.user = user
         self.password = password
 
-    def _params(self, **extra: str) -> dict:
+    def _params(self, **extra) -> dict:
         salt = secrets.token_hex(8)
         token = hashlib.md5((self.password + salt).encode()).hexdigest()
         p = {
@@ -33,10 +33,12 @@ class SubsonicClient:
         p.update(extra)
         return p
 
-    def _call(self, endpoint: str, **params: str) -> dict:
+    def _call(self, endpoint: str, **params) -> dict:
+        # values may be lists (repeated API params, e.g. songId=... songId=...)
+        flat = {k: (v if isinstance(v, list) else str(v)) for k, v in params.items()}
         try:
             r = requests.get(
-                f"{self.url}/rest/{endpoint}", params=self._params(**params), timeout=30
+                f"{self.url}/rest/{endpoint}", params=self._params(**flat), timeout=30
             )
             r.raise_for_status()
         except requests.RequestException as e:
@@ -98,3 +100,32 @@ class SubsonicClient:
 
     def unstar(self, song_id: str) -> None:
         self._call("unstar", id=song_id)
+
+    # ---- audition playlist -------------------------------------------------
+
+    def search_songs(self, artist: str, title: str, limit: int = 10) -> list[dict]:
+        """Raw search3 song hits: {id, title, artist, path}."""
+        data = self._call(
+            "search3",
+            query=f"{artist} {title}",
+            songCount=str(limit), songOffset="0",
+            artistCount="0", albumCount="0",
+        )
+        return [
+            {"id": s["id"], "title": s.get("title"), "artist": s.get("artist"),
+             "path": s.get("path")}
+            for s in data.get("searchResult3", {}).get("song", [])
+        ]
+
+    def playlists(self) -> list[dict]:
+        data = self._call("getPlaylists")
+        return data.get("playlists", {}).get("playlist", [])
+
+    def replace_playlist(self, name: str, song_ids: list[str]) -> None:
+        """Full content replacement via delete + createPlaylist (idempotent)."""
+        for pl in self.playlists():
+            if pl.get("playlistName") == name:
+                self._call("deletePlaylist", id=pl["id"])
+                break
+        self._call("createPlaylist", name=name,
+                   **{"songId": list(song_ids)})
