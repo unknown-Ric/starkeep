@@ -12,9 +12,15 @@ import mutagen
 from . import state as st
 from .config import Config
 from .lastfm import LastfmClient
+from .playlist import AUDITION_NAME
 from .subsonic import SubsonicClient
 
 log = logging.getLogger(__name__)
+
+
+def _pc_key(artist: str, title: str) -> str:
+    """Key matching subsonic.playlist_playcounts()."""
+    return _norm(artist) + "|" + _norm(title)
 
 
 def _norm(text: str | None) -> str:
@@ -47,11 +53,18 @@ def starred_match(candidate: dict, starred: list[dict]) -> bool:
     return False
 
 
-def plan(cfg: Config, starred: list[dict], stt: dict,
+def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int] | None = None,
          now: dt.datetime | None = None) -> tuple[list[tuple[dict, Path]], list[tuple[dict, Path]]]:
-    """Pure keep/expire decision over downloaded candidates (no disk changes)."""
+    """Pure keep/expire decision over downloaded candidates (no disk changes).
+
+    Lifetime is per-run (`expiry_runs`), not per-day: an unstarred batch is
+    expired once heard, unheard tracks get `carry_over_runs` extra passes.
+    With `expiry_runs == 0` the old day-based `expiry_days` applies instead.
+    The per-candidate `auditions` counter is bumped here (in-memory only).
+    """
     now = now or st.utcnow_dt()
     incoming_root = Path(cfg.incoming_dir).resolve()
+    playcounts = playcounts or {}
     keeps: list[tuple[dict, Path]] = []
     deletes: list[tuple[dict, Path]] = []
 
@@ -68,10 +81,20 @@ def plan(cfg: Config, starred: list[dict], stt: dict,
                 log.warning("starred but file unusable: %s - %s (%s)",
                             c["artist"], c["title"], src)
             continue
-        age = st.days_since(c.get("downloaded_at") or c.get("added_at"), now)
-        if age >= cfg.expiry_days:
-            deletes.append((c, src))
-        # else: young unstarred -> untouched, rolls over to next week
+        heard = playcounts.get(_pc_key(c["artist"], c["title"]), 0) >= cfg.min_plays
+        if cfg.expiry_runs:
+            c["auditions"] = int(c.get("auditions", 0)) + 1
+            if c["auditions"] >= cfg.expiry_runs and heard:
+                c["_expire_reason"] = "heard-unstarred"
+            elif c["auditions"] > cfg.expiry_runs + cfg.carry_over_runs:
+                c["_expire_reason"] = "never-played"
+            else:
+                continue  # still inside its runway
+        elif st.days_since(c.get("downloaded_at") or c.get("added_at"), now) >= cfg.expiry_days:
+            c["_expire_reason"] = "age"
+        else:
+            continue  # young unstarred -> untouched, rolls over to next week
+        deletes.append((c, src))
     return keeps, deletes
 
 
@@ -116,7 +139,8 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
            dry_run: bool = False, now: dt.datetime | None = None) -> dict:
     """The keep/expire pass: read stars from Subsonic, act on incoming files."""
     starred = sub.starred_songs()
-    keeps, deletes = plan(cfg, starred, stt, now=now)
+    playcounts = sub.playlist_playcounts(AUDITION_NAME) if cfg.expiry_runs else {}
+    keeps, deletes = plan(cfg, starred, stt, playcounts=playcounts, now=now)
 
     if dry_run:
         return {
@@ -139,6 +163,7 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
         except Exception as e:
             # Leave it downloaded: a later run can retry (or it expires).
             log.error("promotion failed for %s - %s: %s", c["artist"], c["title"], e)
+            c.pop("_expire_reason", None)
             continue
         c["status"] = "promoted"
         log.info("promoted %s - %s -> %s", c["artist"], c["title"], dst)
@@ -154,11 +179,14 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
             log.warning("not deleting %s: missing or outside incoming_dir", src)
             continue
         if starred_match(c, starred):  # starred between planning and acting
+            c.pop("_expire_reason", None)
             continue
         src.unlink(missing_ok=True)
+        reason = c.pop("_expire_reason", "age")
         c["status"] = "expired"
         stt["deleted"].append({"path": str(src), "at": st.utcnow()})
         deleted.append(str(src))
+        log.info("expired (%s): %s - %s", reason, c["artist"], c["title"])
         st.save(cfg.state_file, stt)
 
     return {

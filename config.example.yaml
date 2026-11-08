@@ -22,9 +22,19 @@ log_dir: ""                # one log file per day
 
 # Behavior
 cap: 30                    # candidates per run
-expiry_days: 14            # unstarred audition lifetime; expired tracks are
-                           # never recommended again (permanent reject)
+expiry_days: 14            # fallback lifetime in days; used ONLY when expiry_runs is 0
+expiry_runs: 2             # run-based audition lifetime: an unstarred candidate is
+                           # expired after this many decide passes, and only
+                           # if it was heard (see min_plays). 0 = day-based.
+min_plays: 1               # Navidrome playCount >= this counts as "heard"
+carry_over_runs: 1         # extra decide passes granted while playCount < min_plays
 similar_per_seed: 3        # similar tracks per seed (scrobbled) track
 max_strikes: 2             # download failures before a candidate is abandoned
+harvest_days: 7            # scrobble window feeding the harvest; `run --since
+                           # YYYY-MM-DD` widens it for one pass
 downloader: "ytdlp"        # only 'ytdlp' in v1
 audio_format: "m4a"        # m4a, mp3, opus, flac, ...
+playlist_icon: "https://opengraph.githubassets.com/1/unknown-Ric/starkeep"
+                           # cover for the Starkeep Audition playlist
+                           # (Navidrome-native, auth with the subsonic account;
+                           # any PNG/JPEG/WEBP/GIF URL works, "" disables it)

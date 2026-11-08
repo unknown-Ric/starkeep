@@ -38,7 +38,7 @@ def _empty() -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
         "last_run": None,
-        "candidates": [],  # artist,title,status,added_at,added_run,file_path,strikes,downloaded_at
+        "candidates": [],  # artist,title,status,added_at,added_run,file_path,strikes,downloaded_at,auditions
         "moved": [],
         "deleted": [],
     }

@@ -123,6 +123,9 @@ def main() -> None:
     run_p = sub.add_parser("run", help="full pipeline (reconcile, decide, harvest, download)")
     run_p.add_argument("--cap", type=int, default=None,
                        help="override config cap for this run (smoke tests)")
+    run_p.add_argument("--since", metavar="YYYY-MM-DD", default=None,
+                       help="harvest scrobbles starting from this date instead "
+                            "of the default harvest_days window (spot runs)")
     dry_p = sub.add_parser("dry-run", help="show what promote/delete would do, touch nothing")
     dry_p.add_argument("--cap", type=int, default=None, help="override config cap")
     sub.add_parser("status", help="summary of last run from state.json")
@@ -134,6 +137,15 @@ def main() -> None:
     cfg = cfg.with_api_key()
     if getattr(args, "cap", None) is not None:
         cfg = replace(cfg, cap=args.cap)
+    if getattr(args, "since", None):
+        import datetime as dt
+        try:
+            start = dt.date.fromisoformat(args.since)
+        except ValueError:
+            ap.error(f"--since needs an ISO date (YYYY-MM-DD), got {args.since!r}")
+        if start > dt.date.today():
+            ap.error(f"--since {args.since} is in the future")
+        cfg = replace(cfg, harvest_days=(dt.date.today() - start).days + 1)
 
     if args.cmd == "status":
         sys.exit(status(cfg))

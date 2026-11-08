@@ -12,6 +12,7 @@ class FakeSub:
             {"id": "pl-old", "playlistName": playlist.AUDITION_NAME}]
         self.created = []
         self.deleted = []
+        self.images = []  # (playlist_id, data, media_type)
 
     def search_songs(self, artist, title, limit=10):
         return self.songs
@@ -24,6 +25,10 @@ class FakeSub:
             if pl["playlistName"] == name:
                 self.deleted.append(pl["id"])
         self.created.append({"name": name, "song_ids": song_ids})
+        return "new-pl"
+
+    def set_playlist_image(self, playlist_id, data, media_type):
+        self.images.append((playlist_id, data, media_type))
 
 
 def _state(tmp_path, cands):
@@ -112,3 +117,38 @@ def test_falls_back_to_artist_title_when_basename_differs(tmp_path):
     sub = FakeSub(songs)
     out = playlist.sync_audition(sub, stt)
     assert sub.created[-1]["song_ids"] == ["srv-1"]
+    assert out["icon"] == "skipped"  # no icon_url configured
+
+
+def test_icon_uploaded_for_the_new_playlist_id(tmp_path, monkeypatch):
+    stt = _state(tmp_path, [])
+    sub = FakeSub(SONGS)
+    monkeypatch.setattr(playlist.requests, "get", lambda url, timeout=30:
+                        FakeResponse(b"IMG", "image/png"))
+    out = playlist.sync_audition(sub, stt, icon_url="https://example/l.png")
+    assert sub.images == [("new-pl", b"IMG", "image/png")]
+    assert out["icon"] == "uploaded"
+
+
+def test_icon_failure_never_breaks_the_playlist(tmp_path, monkeypatch):
+    stt = _state(tmp_path, [])
+    sub = FakeSub(SONGS)
+
+    def boom(url, timeout=30):
+        raise OSError("offline")
+    monkeypatch.setattr(playlist.requests, "get", boom)
+    out = playlist.sync_audition(sub, stt, icon_url="https://example/l.png")
+    assert out["icon"] == "failed"
+    assert out["playlist"] == playlist.AUDITION_NAME
+
+
+class FakeResponse:
+    def __init__(self, content, content_type):
+        self.content, self._ct = content, content_type
+
+    @property
+    def headers(self):
+        return {"Content-Type": self._ct}
+
+    def raise_for_status(self):
+        pass

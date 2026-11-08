@@ -11,6 +11,8 @@ import logging
 
 from pathlib import Path
 
+import requests
+
 from . import state as st
 from .subsonic import SubsonicClient, _norm
 
@@ -38,8 +40,12 @@ def _song_id_for(sub: SubsonicClient, cand: dict) -> str | None:
     return by_basename or by_name
 
 
-def sync_audition(sub: SubsonicClient, stt: dict) -> dict:
-    """Server playlist = exactly the tracks still awaiting a star decision."""
+def sync_audition(sub: SubsonicClient, stt: dict, icon_url: str = "") -> dict:
+    """Server playlist = exactly the tracks still awaiting a star decision.
+
+    The playlist is deleted + recreated each run (server id changes), so a
+    custom Navidrome cover is re-uploaded to the new id right after.
+    """
     cands = [c for c in stt["candidates"] if c.get("status") == "downloaded"]
     song_ids: list[str] = []
     for c in cands:
@@ -49,5 +55,23 @@ def sync_audition(sub: SubsonicClient, stt: dict) -> dict:
                      c["artist"], c["title"])
             continue
         song_ids.append(sid)
-    sub.replace_playlist(AUDITION_NAME, song_ids)
-    return {"playlist": AUDITION_NAME, "songs": len(song_ids), "candidates": len(cands)}
+    pl_id = sub.replace_playlist(AUDITION_NAME, song_ids)
+    icon = {"icon": "skipped"}  # no id / no url / server without native API
+    if icon_url and pl_id:
+        icon = _sync_icon(sub, pl_id, icon_url)
+    return {"playlist": AUDITION_NAME, "songs": len(song_ids),
+            "candidates": len(cands), **icon}
+
+
+def _sync_icon(sub: SubsonicClient, pl_id: str, icon_url: str) -> dict:
+    try:
+        r = requests.get(icon_url, timeout=30)
+        r.raise_for_status()
+        media_type = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if media_type == "image/jpg":
+            media_type = "image/jpeg"
+        sub.set_playlist_image(pl_id, r.content, media_type)
+        return {"icon": "uploaded"}
+    except Exception as e:
+        log.warning("playlist icon upload failed (%s): %s", icon_url, e)
+        return {"icon": "failed"}

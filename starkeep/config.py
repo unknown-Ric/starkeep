@@ -12,6 +12,9 @@ import yaml
 
 CONFIG_FILE = "config.yaml"
 
+# Promotional image GitHub builds per repo; survives forks/renames via config.
+DEFAULT_PLAYLIST_ICON = "https://opengraph.githubassets.com/1/unknown-Ric/starkeep"
+
 
 @dataclass
 class Config:
@@ -29,11 +32,19 @@ class Config:
     log_dir: str = ""
     # Behavior
     cap: int = 30                 # candidates per run
-    expiry_days: int = 14         # unstarred-orphan lifetime in incoming/
+    expiry_days: int = 14         # fallback lifetime in days; used when expiry_runs == 0
     similar_per_seed: int = 3     # similar tracks pulled per seed track
     max_strikes: int = 2          # >= this many failures -> never retry
+    # Run-based audition lifetime (the default):
+    expiry_runs: int = 2          # decide passes an unstarred batch gets once heard
+    min_plays: int = 1            # Navidrome playCount >= this counts as "heard"
+    carry_over_runs: int = 1      # extra passes for tracks that were never played
     downloader: str = "ytdlp"     # only "ytdlp" supported for now (MeTube later)
     audio_format: str = "m4a"
+    harvest_days: int = 7         # scrobble window feeding the harvest
+    # Navidrome-native playlist cover: the GitHub repo image. Any PNG/JPEG/
+    # WEBP/GIF URL works; empty string disables the upload entirely.
+    playlist_icon: str = DEFAULT_PLAYLIST_ICON
 
     def with_api_key(self) -> "Config":
         if not self.lastfm_api_key:
@@ -119,10 +130,18 @@ def validate(cfg: Config, require_lastfm: bool = True) -> list[str]:
         problems.append("cap must be >= 0 (0 = decide-only run)")
     if cfg.expiry_days < 1:
         problems.append("expiry_days must be >= 1")
+    if cfg.expiry_runs < 0:
+        problems.append("expiry_runs must be >= 0 (0 = day-based expiry)")
+    if cfg.carry_over_runs < 0:
+        problems.append("carry_over_runs must be >= 0")
+    if cfg.min_plays < 1:
+        problems.append("min_plays must be >= 1")
     if cfg.similar_per_seed < 1:
         problems.append("similar_per_seed must be >= 1")
     if cfg.max_strikes < 1:
         problems.append("max_strikes must be >= 1")
+    if cfg.harvest_days < 1:
+        problems.append("harvest_days must be >= 1")
     if cfg.downloader != "ytdlp":
         problems.append("downloader must be 'ytdlp' in v1")
 

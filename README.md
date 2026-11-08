@@ -18,7 +18,7 @@ Last.fm scrobbles ──▶ similar tracks ──▶ yt-dlp ──▶ incoming/ 
                                                         │
         star in any Subsonic app (offline OK) ──────────┤
                                                         ├─ starred → library/<Artist>/<Album>/NN. Title
-        not starred for 14 days ────────────────────────┴─ deleted
+        not starred after expiry_runs (heard only) ───────┴─ deleted
 ```
 
 <div align="center">
@@ -71,6 +71,15 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
 `run` and `dry-run` also accept `--cap N`; `run --cap 0` is a decide-only pass
 (promote/expire without downloading anything).
 
+A **spot run** outside the schedule is just `starkeep run` (the pipeline is
+idempotent and lock-protected, so extra runs are safe). Use `--since
+YYYY-MM-DD` to widen the scrobble window for that one pass — e.g. after a busy
+week, or to seed the first run from a month of history:
+
+```bash
+starkeep run --since 2026-10-01
+```
+
 ## How "star to keep" works
 
 1. **Harvest** — next week's most-played distinct tracks seed Last.fm
@@ -90,9 +99,12 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
    `<library>/<Artist>/<Album>/NN. Title` (or `<Artist>/Singles/`). Last.fm
    album/track-number info fills gaps; existing tags are never overwritten
    blindly.
-5. **Expire** — downloaded tracks older than `expiry_days` (default 14) that
-   were never starred are deleted. With a weekly cron that means roughly two
-   to three weeks of listening.
+5. **Expire** — a downloaded track that was never starred is deleted after
+   `expiry_runs` decide passes (default 2 = the next run twice over), but only
+   if it was actually heard (`min_plays` against the Navidrome playCount).
+   Tracks that were never played get `carry_over_runs` extra passes before
+   they go, so nothing can die unheard. Set `expiry_runs: 0` to fall back to a
+   pure day-based lifetime (`expiry_days`).
 
 Promotion only appears in Navidrome after its next library scan. Configure a
 scan schedule (or trigger one from a hook) that runs after `starkeep run`.
@@ -158,8 +170,14 @@ important ones:
 - `incoming_dir` — audition folder, must be Navidrome-visible and writable
 - `library_dir` — permanent target, must **not** be inside `incoming_dir`
 - `cap` — candidates per run (default 30)
-- `expiry_days` — audition lifetime (default 14)
+- `expiry_runs` / `min_plays` / `carry_over_runs` — the run-based audition
+  lifetime (see "Expire" above); `expiry_days` (default 14) is the day-based
+  fallback, used only when `expiry_runs: 0`
 - `max_strikes` — download failures before permanent skip (default 2)
+- `harvest_days` — scrobble window feeding the harvest (default 7)
+- `playlist_icon` — cover art for the `Starkeep Audition` playlist (Navidrome
+  native API, requires Navidrome ≥ the 2026-03 release); defaults to the
+  GitHub repo image, point it elsewhere or set `""` to disable
 - `audio_format` — `m4a` (default), `mp3`, `opus`, `flac`, …
 
 ## FAQ

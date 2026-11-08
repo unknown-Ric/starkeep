@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import secrets
 
@@ -22,6 +23,7 @@ class SubsonicClient:
         self.url = url.rstrip("/")
         self.user = user
         self.password = password
+        self._nd_token: str | None = None
 
     def _params(self, **extra) -> dict:
         salt = secrets.token_hex(8)
@@ -121,11 +123,66 @@ class SubsonicClient:
         data = self._call("getPlaylists")
         return data.get("playlists", {}).get("playlist", [])
 
-    def replace_playlist(self, name: str, song_ids: list[str]) -> None:
-        """Full content replacement via delete + createPlaylist (idempotent)."""
+    def playlist_playcounts(self, name: str) -> dict[str, int]:
+        """Normalized (artist,title) -> playCount for songs in the named playlist.
+
+        One getPlaylist call. Used by decide's run-based expiry: a candidate the
+        user never played must not be expired as "heard and rejected".
+        """
+        pid = next((p["id"] for p in self.playlists()
+                    if p.get("playlistName") == name), None)
+        if not pid:
+            return {}
+        data = self._call("getPlaylist", id=pid)
+        counts: dict[str, int] = {}
+        for e in data.get("playlist", {}).get("entry", []):
+            key = _norm(e.get("artist")) + "|" + _norm(e.get("title"))
+            counts[key] = max(counts.get(key, 0), int(e.get("playCount") or 0))
+        return counts
+
+    def replace_playlist(self, name: str, song_ids: list[str]) -> str | None:
+        """Full content replacement via delete + createPlaylist (idempotent).
+
+        Returns the server id of the (re)created playlist, or None if the
+        server does not report it — callers that need the id must handle None.
+        """
         for pl in self.playlists():
             if pl.get("playlistName") == name:
                 self._call("deletePlaylist", id=pl["id"])
                 break
-        self._call("createPlaylist", name=name,
-                   **{"songId": list(song_ids)})
+        data = self._call("createPlaylist", name=name,
+                          **{"songId": list(song_ids)})
+        # Navidrome nests the created playlist under "playlist" (not "createPlaylist").
+        created = (data.get("createPlaylist", {}).get("playlist")
+                   or data.get("playlist") or {})
+        if created.get("id"):
+            return str(created["id"])
+        for pl in self.playlists():  # servers returning an empty body: look up by name
+            if pl.get("playlistName") == name:
+                return pl["id"]
+        return None
+
+    # ---- Navidrome-native playlist cover art --------------------------------
+    # Subsonic API has no way to set playlist artwork; Navidrome added a native
+    # endpoint in 2026-03 (#5110). Needs a JWT from /auth/login, not subsonic auth.
+
+    def navidrome_token(self) -> str:
+        if not getattr(self, "_nd_token", None):
+            import requests as _rq  # already a hard dependency; import is free
+            r = _rq.post(f"{self.url}/auth/login",
+                         json={"username": self.user, "password": self.password},
+                         timeout=30)
+            r.raise_for_status()
+            self._nd_token = r.json()["token"]
+        return self._nd_token
+
+    def set_playlist_image(self, playlist_id: str, data: bytes,
+                           media_type: str = "image/png") -> None:
+        import requests as _rq
+        r = _rq.post(
+            f"{self.url}/api/playlist/{playlist_id}/image",
+            files={"image": (f"cover.{media_type.split('/')[1]}", io.BytesIO(data), media_type)},
+            headers={"X-ND-Authorization": f"Bearer {self.navidrome_token()}"},  # Navidrome strips a Bearer prefix
+            timeout=30,
+        )
+        r.raise_for_status()

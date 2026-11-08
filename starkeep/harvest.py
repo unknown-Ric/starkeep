@@ -21,7 +21,7 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
         transient failures retried while strikes < max_strikes)
       - the actual library (Subsonic search3)
     """
-    seeds = lfm.recent_track_seeds(days=7, limit=100)
+    seeds = lfm.recent_track_seeds(days=cfg.harvest_days, limit=100)
     if not seeds:
         log.warning("no recent scrobbles — harvest produced nothing (run skipped safely)")
         return []

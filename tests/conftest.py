@@ -23,6 +23,7 @@ def cfg(tmp_path):
         log_dir=str(tmp_path / "logs"),
         cap=5,
         expiry_days=14,
+        expiry_runs=0,  # the day-based tests below assert on expiry_days
     )
 
 
@@ -32,15 +33,19 @@ def now():
 
 
 class FakeSubsonic:
-    def __init__(self, stars=None, owned=None):
+    def __init__(self, stars=None, owned=None, playcounts=None):
         self.stars = stars or []
         self.owned = owned or set()
+        self.playcounts = playcounts or {}
 
     def ping(self):
         return None
 
     def starred_songs(self):
         return self.stars
+
+    def playlist_playcounts(self, name):
+        return self.playcounts
 
     def song_exists(self, artist, title):
         return (artist.casefold(), title.casefold()) in {

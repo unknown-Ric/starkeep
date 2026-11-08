@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -115,3 +116,63 @@ def test_dry_run_changes_nothing(cfg, now):
     assert src.exists()
     assert c["status"] == "downloaded"
     assert not Path(cfg.state_file).exists()
+
+
+# ---- run-based lifetime (expiry_runs) --------------------------------------
+
+def _runs_cfg(cfg, runs=2, min_plays=1, carry=1):
+    return replace(cfg, expiry_runs=runs, min_plays=min_plays, carry_over_runs=carry)
+
+
+def test_heard_unstarred_track_expires_at_the_run_budget(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Heard", "Track", 1, now)
+    sub = FakeSubsonic(playcounts={"heard|track": 3})
+
+    decide.decide(_runs_cfg(cfg), sub, FakeLastfm(), stt, now=now)  # pass 1: surviving
+    assert src.exists() and c["status"] == "downloaded"
+    decide.decide(_runs_cfg(cfg), sub, FakeLastfm(), stt, now=now)  # pass 2: expired
+
+    assert not src.exists()
+    assert c["status"] == "expired"
+
+
+def test_never_played_track_carries_over_then_expires(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Never", "Heard", 1, now)
+    sub = FakeSubsonic(playcounts={"never|heard": 0})
+    cfg = _runs_cfg(cfg)  # 2 passes + 1 carry-over
+
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 1
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 2: unheard, stays
+    assert src.exists() and c["status"] == "downloaded"
+
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 3: carry-over spent
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 4: deleted (2+1+1)
+
+    assert not src.exists()
+    assert c["status"] == "expired"
+
+
+def test_min_plays_is_configurable(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Once", "Track", 1, now)
+    sub = FakeSubsonic(playcounts={"once|track": 1})
+    cfg = _runs_cfg(cfg, min_plays=2)  # 1 play is not "enough"
+
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 1
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # pass 2: not heard enough, carries
+
+    assert src.exists() and c["status"] == "downloaded"
+
+
+def test_starred_track_is_immune_to_the_run_budget(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Loved", "Track", 99, now)
+    stars = [{"artist": "Loved", "title": "Track", "path": "x/Loved - Track.m4a"}]
+    sub = FakeSubsonic(stars, playcounts={"loved|track": 0})
+
+    result = decide.decide(_runs_cfg(cfg), sub, FakeLastfm({"album": "Album"}), stt, now=now)
+
+    assert len(result["keeps"]) == 1
+    assert c["status"] == "promoted"
