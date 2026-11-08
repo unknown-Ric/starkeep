@@ -21,10 +21,6 @@ Last.fm scrobbles ──▶ similar tracks ──▶ yt-dlp ──▶ incoming/ 
         not starred after expiry_runs (heard only) ───────┴─ deleted
 ```
 
-<div align="center">
-  <img src="starkeep-how-it-works.gif" alt="How starkeep works: download into the audition folder, star to keep, the rest expires" width="560">
-</div>
-
 ## Requirements
 
 - Python 3.10+
