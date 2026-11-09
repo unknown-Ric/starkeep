@@ -70,8 +70,17 @@ def _sync_icon(sub: SubsonicClient, pl_id: str, icon_url: str) -> dict:
         media_type = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if media_type == "image/jpg":
             media_type = "image/jpeg"
-        sub.set_playlist_image(pl_id, r.content, media_type)
+        data = r.content
+        if media_type == "image/svg+xml":
+            data = _svg_to_png(data)  # Navidrome's /api/playlist/image rejects SVG (400)
+            media_type = "image/png"
+        sub.set_playlist_image(pl_id, data, media_type)
         return {"icon": "uploaded"}
     except Exception as e:
         log.warning("playlist icon upload failed (%s): %s", icon_url, e)
         return {"icon": "failed"}
+
+
+def _svg_to_png(svg: bytes) -> bytes:
+    import cairosvg  # optional dep; SVG cover art is not first-class on navidrome
+    return cairosvg.svg2png(bytestring=svg, output_width=512, output_height=512)

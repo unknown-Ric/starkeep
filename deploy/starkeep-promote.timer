@@ -1,0 +1,12 @@
+[Unit]
+Description=starkeep promotion pass every 4 hours
+
+[Timer]
+# :17 to stay clear of the top-of-hour rush; the lockfile makes overlaps with
+# the weekly run harmless.
+OnCalendar=*-*-* 00/4:17:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

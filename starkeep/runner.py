@@ -29,7 +29,7 @@ def setup_logging(cfg: Config) -> None:
     )
 
 
-def run(cfg: Config, dry_run: bool = False) -> dict:
+def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
     setup_logging(cfg)
     with st.StateLock(cfg.state_file):  # prevent overlapping cron runs
         stt = st.load(cfg.state_file)
@@ -43,7 +43,7 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
             log.warning("orphan in incoming/ (not in state, not touched): %s", path)
 
         if dry_run:
-            result = decide.decide(cfg, sub, lfm, stt, dry_run=True)
+            result = decide.decide(cfg, sub, lfm, stt, dry_run=True, expire=expire)
             result["orphans"] = report["orphans"]
             return result
 
@@ -56,7 +56,7 @@ def run(cfg: Config, dry_run: bool = False) -> dict:
 
         # Decide first: last week's stars are promoted/deleted even if this
         # week's harvesting fails (Last.fm outage, empty history, ...).
-        decision = decide.decide(cfg, sub, lfm, stt)
+        decision = decide.decide(cfg, sub, lfm, stt, expire=expire)
 
         candidates = harvest.harvest(cfg, lfm, sub, stt)
         downloaded = download.download_all(cfg, candidates, stt, lfm)

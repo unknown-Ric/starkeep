@@ -18,7 +18,8 @@ Last.fm scrobbles ──▶ similar tracks ──▶ yt-dlp ──▶ incoming/ 
                                                         │
         star in any Subsonic app (offline OK) ──────────┤
                                                         ├─ starred → library/<Artist>/<Album>/NN. Title
-        not starred after expiry_runs (heard only) ───────┴─ deleted
+        not starred after expiry_days ───────┴─ deleted at the weekly
+                                             cleaning run
 ```
 
 ## Requirements
@@ -91,16 +92,18 @@ starkeep run --since 2026-10-01
    every run to match `incoming/` exactly (promoted and expired tracks drop out
    automatically). Listen in any Subsonic app and star what you want to keep
    (offline stars sync later, e.g. when you get home).
-4. **Decide** — on the next run, starred tracks are promoted into
-   `<library>/<Artist>/<Album>/NN. Title` (or `<Artist>/Singles/`). Last.fm
+4. **Decide** — starred tracks are promoted into
+   `<library>/<Artist>/<Album>/NN. Title` (or `<Artist>/Singles/`) by the
+   frequent **promotion pass**. Last.fm
    album/track-number info fills gaps; existing tags are never overwritten
    blindly.
-5. **Expire** — a downloaded track that was never starred is deleted after
-   `expiry_runs` decide passes (default 2 = the next run twice over), but only
-   if it was actually heard (`min_plays` against the Navidrome playCount).
-   Tracks that were never played get `carry_over_runs` extra passes before
-   they go, so nothing can die unheard. Set `expiry_runs: 0` to fall back to a
-   pure day-based lifetime (`expiry_days`).
+5. **Expire** — the weekly **cleaning run** deletes downloaded tracks that were
+   never starred. With `expiry_runs: 0` (default) an unstarred track dies once
+   it is `expiry_days` old (default 7 = Monday's playlist is gone by the next
+   Monday). Alternatively a per-cleaning-run budget: `expiry_runs: 2` means
+   "two cleaning passes once heard" (`min_plays` against the Navidrome
+   playCount), with `carry_over_runs` extra passes for tracks never played.
+   Promotion passes never delete and never consume the budget.
 
 Promotion only appears in Navidrome after its next library scan. Configure a
 scan schedule (or trigger one from a hook) that runs after `starkeep run`.
@@ -128,6 +131,13 @@ scan schedule (or trigger one from a hook) that runs after `starkeep run`.
 
 ## Scheduling
 
+The recommended rhythm is two schedules (see "Run types"):
+
+- **weekly cleaning + download** — `deploy/starkeep.{service,timer}`, Monday
+  morning
+- **frequent promotion** — `deploy/starkeep-promote.{service,timer}`, every
+  4 h, `run --cap 0 --no-expire`
+
 systemd units are in [`deploy/`](deploy/): install both, adjust `User`,
 `WorkingDirectory` and `ExecStart`, put the API key in `/etc/starkeep.env`:
 
@@ -136,15 +146,21 @@ LASTFM_API_KEY=...
 ```
 
 ```bash
-sudo cp deploy/starkeep.service deploy/starkeep.timer /etc/systemd/system/
+sudo cp deploy/starkeep.service deploy/starkeep.timer \
+        deploy/starkeep-promote.service deploy/starkeep-promote.timer \
+        /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now starkeep.timer
+sudo systemctl enable --now starkeep.timer starkeep-promote.timer
 ```
+
+The timers are templates — edit `OnCalendar` to move Monday or change the
+promotion cadence; the audition lifetime is the `expiry_days` config key.
 
 Plain cron works too (the built-in lock makes overlaps harmless):
 
 ```cron
-17 4 * * 1 cd /etc/starkeep && . /etc/starkeep.env && starkeep run
+17 4 * * 1     cd /etc/starkeep && . /etc/starkeep.env && starkeep run
+17 */4 * * *   cd /etc/starkeep && . /etc/starkeep.env && starkeep run --cap 0 --no-expire
 ```
 
 ## Navidrome setup notes
@@ -166,14 +182,19 @@ important ones:
 - `incoming_dir` — audition folder, must be Navidrome-visible and writable
 - `library_dir` — permanent target, must **not** be inside `incoming_dir`
 - `cap` — candidates per run (default 30)
-- `expiry_runs` / `min_plays` / `carry_over_runs` — the run-based audition
-  lifetime (see "Expire" above); `expiry_days` (default 14) is the day-based
-  fallback, used only when `expiry_runs: 0`
+- `expiry_days` — audition lifetime (default 7): unstarred candidates older
+  than this are deleted at the next **cleaning run** (`starkeep run`, schedule
+  it weekly for the Monday → next-Monday rhythm)
+- `expiry_runs` / `min_plays` / `carry_over_runs` — alternative per-cleaning-
+  cycle budget (`expiry_runs: 0` = day-based default); promotion passes
+  (`--no-expire`) never delete and never consume a budget
 - `max_strikes` — download failures before permanent skip (default 2)
 - `harvest_days` — scrobble window feeding the harvest (default 7)
 - `playlist_icon` — cover art for the `Starkeep Audition` playlist (Navidrome
-  native API, requires Navidrome ≥ the 2026-03 release); defaults to the
-  GitHub repo image, point it elsewhere or set `""` to disable
+  native API, requires Navidrome ≥ the 2026-03 release); defaults to the repo
+  logo PNG (`raw.githubusercontent.com/.../starkeep-logo.png`). Substitute it
+  with any image URL (an SVG URL works too — it gets rasterized, needs
+  `pip install cairosvg`), or set `""` to keep whatever cover the server has
 - `audio_format` — `m4a` (default), `mp3`, `opus`, `flac`, …
 
 ## FAQ
@@ -192,7 +213,11 @@ Let it expire, or delete it and remove the candidate from `state.json`. Audio
 bias reduces but cannot eliminate bad matches.
 
 **Can I run it more than once a week?**
-Yes; the pipeline is idempotent. Expiry is measured in days, not runs.
+Yes — that is the point of promotion passes: `run --no-expire` is safe at any
+cadence (every few hours is typical) because it only promotes and rebuilds the
+audition playlist. Only a cleaning run can delete; how often you clean changes
+when the `expiry_days` tick is spent, not how long tracks audition:
+Monday's candidates die at the next Monday run.
 
 **Does it work with Airsonic/other Subsonic servers?**
 The client uses `ping`, `search3`, `getStarred2`, `unstar`, and

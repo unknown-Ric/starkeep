@@ -31,8 +31,8 @@ def _downloaded(cfg, stt, artist, title, age_days, now, filename=None):
 
 def test_expiry_boundary_is_exactly_expiry_days(cfg, now):
     stt = st.load(cfg.state_file)
-    _, old = _downloaded(cfg, stt, "Old", "Track", 14, now)
-    _, young = _downloaded(cfg, stt, "Young", "Track", 14 - 1 / 86400, now)
+    _, old = _downloaded(cfg, stt, "Old", "Track", 14, now)      # calendar day 14
+    _, young = _downloaded(cfg, stt, "Young", "Track", 13, now)  # 13 days + hours
 
     result = decide.decide(cfg, FakeSubsonic(), FakeLastfm(), stt, now=now)
 
@@ -40,6 +40,21 @@ def test_expiry_boundary_is_exactly_expiry_days(cfg, now):
     assert not old.exists()
     assert young.exists()
     assert Path(young).is_file()
+
+
+def test_batch_downloaded_after_last_run_expiry_day_still_dies_on_time(cfg, now):
+    # The weekly run fires 04:17 and downloads land ~04:27: second-for-second
+    # age (6d23h50m on the next run) would push every Monday batch a whole
+    # extra week. Calendar-day age guarantees Monday batch -> next Monday.
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Batch", "Track",
+                         7 - 10 / 60 / 24, now)  # 6d23h50m old
+    cfg = replace(cfg, expiry_days=7)
+
+    decide.decide(cfg, FakeSubsonic(), FakeLastfm(), stt, now=now)
+
+    assert not Path(src).exists()
+    assert c["status"] == "expired"
 
 
 def test_never_deletes_outside_incoming(cfg, now):
@@ -116,6 +131,47 @@ def test_dry_run_changes_nothing(cfg, now):
     assert src.exists()
     assert c["status"] == "downloaded"
     assert not Path(cfg.state_file).exists()
+
+
+# ---- promotion-only passes (run --no-expire) --------------------------------
+
+def test_promotion_pass_never_deletes(cfg, now):
+    stt = st.load(cfg.state_file)
+    _, old = _downloaded(cfg, stt, "Old", "Track", 99, now)
+    _, young = _downloaded(cfg, stt, "Young", "Track", 1, now)
+
+    result = decide.decide(cfg, FakeSubsonic(), FakeLastfm(), stt, now=now, expire=False)
+
+    assert result["deletes"] == []
+    assert Path(old).is_file() and Path(young).is_file()
+
+
+def test_promotion_pass_does_not_consume_the_run_budget(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Heard", "Track", 1, now)
+    sub = FakeSubsonic(playcounts={"heard|track": 3})
+    cfg = _runs_cfg(cfg)  # budget: expires on the 2nd cleaning pass
+
+    for _ in range(4):  # a 4h-cadence pass does not tick the counter
+        decide.decide(cfg, sub, FakeLastfm(), stt, now=now, expire=False)
+        assert src.exists() and c["status"] == "downloaded"
+
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # cleaning pass 1
+    decide.decide(cfg, sub, FakeLastfm(), stt, now=now)  # cleaning pass 2
+
+    assert not src.exists()
+    assert c["status"] == "expired"
+
+
+def test_promotion_pass_still_promotes_stars(cfg, now):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    stars = [{"artist": "Artist", "title": "Title", "path": ""}]
+
+    result = decide.decide(cfg, FakeSubsonic(stars), FakeLastfm(), stt, now=now, expire=False)
+
+    assert len(result["keeps"]) == 1
+    assert c["status"] == "promoted"
 
 
 # ---- run-based lifetime (expiry_runs) --------------------------------------

@@ -123,11 +123,16 @@ def main() -> None:
     run_p = sub.add_parser("run", help="full pipeline (reconcile, decide, harvest, download)")
     run_p.add_argument("--cap", type=int, default=None,
                        help="override config cap for this run (smoke tests)")
+    run_p.add_argument("--no-expire", action="store_true",
+                       help="promotion-only pass: promote stars, skip expiry/deletion "
+                            "(cleaning happens on the weekly full run)")
     run_p.add_argument("--since", metavar="YYYY-MM-DD", default=None,
                        help="harvest scrobbles starting from this date instead "
                             "of the default harvest_days window (spot runs)")
     dry_p = sub.add_parser("dry-run", help="show what promote/delete would do, touch nothing")
     dry_p.add_argument("--cap", type=int, default=None, help="override config cap")
+    dry_p.add_argument("--no-expire", action="store_true",
+                       help="show what a promotion-only pass would do")
     sub.add_parser("status", help="summary of last run from state.json")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
@@ -163,7 +168,8 @@ def main() -> None:
                 print(f"  - {problem}")
             sys.exit(1)
         try:
-            result = runner.run(cfg, dry_run=(args.cmd == "dry-run"))
+            result = runner.run(cfg, dry_run=(args.cmd == "dry-run"),
+                                expire=not getattr(args, "no_expire", False))
         except Exception as e:  # cron-friendly: one clear line, non-zero exit
             print(f"starkeep {args.cmd} failed: {e}", file=sys.stderr)
             sys.exit(1)

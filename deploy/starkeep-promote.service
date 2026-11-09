@@ -1,0 +1,19 @@
+[Unit]
+Description=starkeep promotion pass: promote starred tracks into the library (never deletes)
+Documentation=https://github.com/unknown-Ric/starkeep
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+WorkingDirectory=/etc/starkeep
+EnvironmentFile=-/etc/starkeep.env
+# --cap 0: no downloads; --no-expire: promotion only — the audition playlist is
+# rebuilt each pass, nothing is deleted and the expiry budget is not consumed.
+# Cleaning runs separately on starkeep.timer (weekly): it expires and downloads.
+ExecStart=/opt/starkeep/venv/bin/starkeep --config-dir /etc/starkeep run --cap 0 --no-expire
+Restart=on-failure
+RestartSec=30min
+TimeoutStartSec=1h

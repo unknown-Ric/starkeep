@@ -13,7 +13,8 @@ import yaml
 CONFIG_FILE = "config.yaml"
 
 # Promotional image GitHub builds per repo; survives forks/renames via config.
-DEFAULT_PLAYLIST_ICON = "https://opengraph.githubassets.com/1/unknown-Ric/starkeep"
+# PNG lives next to starkeep-logo.svg so covers need no SVG rasterizer.
+DEFAULT_PLAYLIST_ICON = "https://raw.githubusercontent.com/unknown-Ric/starkeep/main/starkeep-logo.png"
 
 
 @dataclass
@@ -32,18 +33,22 @@ class Config:
     log_dir: str = ""
     # Behavior
     cap: int = 30                 # candidates per run
-    expiry_days: int = 14         # fallback lifetime in days; used when expiry_runs == 0
+    expiry_days: int = 7          # audition lifetime: unstarred after this many
+                                  # days is deleted at the next cleaning run
     similar_per_seed: int = 3     # similar tracks pulled per seed track
     max_strikes: int = 2          # >= this many failures -> never retry
-    # Run-based audition lifetime (the default):
-    expiry_runs: int = 2          # decide passes an unstarred batch gets once heard
+    # Cleaning-cycle audition lifetime (alternative to day-based):
+    expiry_runs: int = 0          # 0 = pure day-based (expiry_days); > 0 = an
+                                  # unstarred batch expires after this many
+                                  # cleaning passes (heard only, min_plays)
     min_plays: int = 1            # Navidrome playCount >= this counts as "heard"
     carry_over_runs: int = 1      # extra passes for tracks that were never played
     downloader: str = "ytdlp"     # only "ytdlp" supported for now (MeTube later)
     audio_format: str = "m4a"
     harvest_days: int = 7         # scrobble window feeding the harvest
-    # Navidrome-native playlist cover: the GitHub repo image. Any PNG/JPEG/
-    # WEBP/GIF URL works; empty string disables the upload entirely.
+    # Navidrome-native playlist cover: the repo logo (PNG). Any PNG/JPEG/
+    # WEBP/GIF/SVG URL can substitute it (SVG is rasterized server-side, needs
+    # cairosvg); empty string disables the upload entirely.
     playlist_icon: str = DEFAULT_PLAYLIST_ICON
 
     def with_api_key(self) -> "Config":

@@ -53,14 +53,39 @@ def starred_match(candidate: dict, starred: list[dict]) -> bool:
     return False
 
 
+def _audition_age(c: dict, now: dt.datetime) -> int:
+    """Age in whole days, counted from midnight (UTC) of the download day.
+
+    Second-for-second age would race the schedule: the weekly batch is born
+    minutes *after* the cleaning run fires, so a strict 24h-clock would let
+    every Monday batch survive one cleaning pass too long. From the download
+    calendar day, "Monday's candidates die the next cleaning run" holds.
+    """
+    ts = c.get("downloaded_at") or c.get("added_at")
+    if not ts:
+        return 1 << 30  # undocumented candidate: treated as ancient, expires
+    t = dt.datetime.fromisoformat(ts)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.timezone.utc)
+    start = t.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (now - start).days
+
+
 def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int] | None = None,
-         now: dt.datetime | None = None) -> tuple[list[tuple[dict, Path]], list[tuple[dict, Path]]]:
+         now: dt.datetime | None = None, expire: bool = True
+         ) -> tuple[list[tuple[dict, Path]], list[tuple[dict, Path]]]:
     """Pure keep/expire decision over downloaded candidates (no disk changes).
 
     Lifetime is per-run (`expiry_runs`), not per-day: an unstarred batch is
     expired once heard, unheard tracks get `carry_over_runs` extra passes.
-    With `expiry_runs == 0` the old day-based `expiry_days` applies instead.
+    With `expiry_runs == 0` the calendar-day `expiry_days` applies instead:
+    unstarred candidates are deleted at the first cleaning run after their
+    download day + `expiry_days` (Monday batch -> next Monday).
     The per-candidate `auditions` counter is bumped here (in-memory only).
+
+    `expire=False` is a promotion-only pass: unstarred candidates are skipped
+    entirely — nothing deleted, and the run budget is not consumed, so frequent
+    promotion runs cannot bring a cleanup forward.
     """
     now = now or st.utcnow_dt()
     incoming_root = Path(cfg.incoming_dir).resolve()
@@ -81,6 +106,8 @@ def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int]
                 log.warning("starred but file unusable: %s - %s (%s)",
                             c["artist"], c["title"], src)
             continue
+        if not expire:
+            continue  # promotion pass: only starred candidates may move
         heard = playcounts.get(_pc_key(c["artist"], c["title"]), 0) >= cfg.min_plays
         if cfg.expiry_runs:
             c["auditions"] = int(c.get("auditions", 0)) + 1
@@ -90,7 +117,7 @@ def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int]
                 c["_expire_reason"] = "never-played"
             else:
                 continue  # still inside its runway
-        elif st.days_since(c.get("downloaded_at") or c.get("added_at"), now) >= cfg.expiry_days:
+        elif _audition_age(c, now) >= cfg.expiry_days:
             c["_expire_reason"] = "age"
         else:
             continue  # young unstarred -> untouched, rolls over to next week
@@ -136,11 +163,13 @@ def promote_file(cfg: Config, src: Path, artist: str, title: str,
 
 
 def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict,
-           dry_run: bool = False, now: dt.datetime | None = None) -> dict:
+           dry_run: bool = False, now: dt.datetime | None = None,
+           expire: bool = True) -> dict:
     """The keep/expire pass: read stars from Subsonic, act on incoming files."""
     starred = sub.starred_songs()
     playcounts = sub.playlist_playcounts(AUDITION_NAME) if cfg.expiry_runs else {}
-    keeps, deletes = plan(cfg, starred, stt, playcounts=playcounts, now=now)
+    keeps, deletes = plan(cfg, starred, stt, playcounts=playcounts, now=now,
+                          expire=expire)
 
     if dry_run:
         return {
