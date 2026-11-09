@@ -121,7 +121,13 @@ class SubsonicClient:
 
     def playlists(self) -> list[dict]:
         data = self._call("getPlaylists")
-        return data.get("playlists", {}).get("playlist", [])
+        out = data.get("playlists", {}).get("playlist", [])
+        # Navidrome returns "name"; OpenSubsonic spec says "playlistName".
+        # Alias either to both so lookup-by-name works against any response shape.
+        for pl in out:
+            pl.setdefault("name", pl.get("playlistName"))
+            pl.setdefault("playlistName", pl.get("name"))
+        return out
 
     def playlist_playcounts(self, name: str) -> dict[str, int]:
         """Normalized (artist,title) -> playCount for songs in the named playlist.
