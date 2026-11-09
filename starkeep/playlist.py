@@ -17,7 +17,7 @@ from . import state as st
 from .subsonic import SubsonicClient, _norm
 
 log = logging.getLogger(__name__)
-AUDITION_NAME = "Starkeep Audition"  # hardcoded until somebody asks for config
+AUDITION_NAME = "Starkeep Audition"  # default; override via config.playlist_name
 
 
 def _song_id_for(sub: SubsonicClient, cand: dict) -> str | None:
@@ -40,7 +40,8 @@ def _song_id_for(sub: SubsonicClient, cand: dict) -> str | None:
     return by_basename or by_name
 
 
-def sync_audition(sub: SubsonicClient, stt: dict, icon_url: str = "") -> dict:
+def sync_audition(sub: SubsonicClient, stt: dict, icon_url: str = "",
+                  name: str = AUDITION_NAME) -> dict:
     """Server playlist = exactly the tracks still awaiting a star decision.
 
     The playlist is deleted + recreated each run (server id changes), so a
@@ -55,11 +56,11 @@ def sync_audition(sub: SubsonicClient, stt: dict, icon_url: str = "") -> dict:
                      c["artist"], c["title"])
             continue
         song_ids.append(sid)
-    pl_id = sub.replace_playlist(AUDITION_NAME, song_ids)
+    pl_id = sub.replace_playlist(name, song_ids)
     icon = {"icon": "skipped"}  # no id / no url / server without native API
     if icon_url and pl_id:
         icon = _sync_icon(sub, pl_id, icon_url)
-    return {"playlist": AUDITION_NAME, "songs": len(song_ids),
+    return {"playlist": name, "songs": len(song_ids),
             "candidates": len(cands), **icon}
 
 

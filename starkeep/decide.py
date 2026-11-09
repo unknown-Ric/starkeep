@@ -12,8 +12,8 @@ import mutagen
 from . import state as st
 from .config import Config
 from .lastfm import LastfmClient
-from .playlist import AUDITION_NAME
 from .subsonic import SubsonicClient
+
 
 log = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
            expire: bool = True) -> dict:
     """The keep/expire pass: read stars from Subsonic, act on incoming files."""
     starred = sub.starred_songs()
-    playcounts = sub.playlist_playcounts(AUDITION_NAME) if cfg.expiry_runs else {}
+    playcounts = sub.playlist_playcounts(cfg.playlist_name) if cfg.expiry_runs else {}
     keeps, deletes = plan(cfg, starred, stt, playcounts=playcounts, now=now,
                           expire=expire)
 

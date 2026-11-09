@@ -39,6 +39,11 @@ harvest_days: 7            # scrobble window feeding the harvest; `run --since
                            # YYYY-MM-DD` widens it for one pass
 downloader: "ytdlp"        # only 'ytdlp' in v1
 audio_format: "m4a"        # m4a, mp3, opus, flac, ...
+playlist_name: "Starkeep Audition"
+                           # the playlist starkeep manages (delete + recreate
+                           # every run). Players pin it by this name; if you
+                           # rename it, the previous playlist is orphaned on
+                           # the server and must be deleted by hand.
 playlist_icon: "https://raw.githubusercontent.com/unknown-Ric/starkeep/main/starkeep-logo.png"
                            # cover for the Starkeep Audition playlist
                            # (Navidrome-native, auth with the subsonic account).

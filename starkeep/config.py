@@ -50,6 +50,9 @@ class Config:
     # WEBP/GIF/SVG URL can substitute it (SVG is rasterized server-side, needs
     # cairosvg); empty string disables the upload entirely.
     playlist_icon: str = DEFAULT_PLAYLIST_ICON
+    # The playlist starkeep deletes+recreates every run — players pin it by
+    # this name. Changing it orphans the old playlist: delete it manually.
+    playlist_name: str = "Starkeep Audition"
 
     def with_api_key(self) -> "Config":
         if not self.lastfm_api_key:
@@ -149,6 +152,8 @@ def validate(cfg: Config, require_lastfm: bool = True) -> list[str]:
         problems.append("harvest_days must be >= 1")
     if cfg.downloader != "ytdlp":
         problems.append("downloader must be 'ytdlp' in v1")
+    if not cfg.playlist_name.strip():
+        problems.append("playlist_name must not be empty")
 
     if cfg.incoming_dir and cfg.library_dir:
         incoming = Path(cfg.incoming_dir).expanduser().resolve()

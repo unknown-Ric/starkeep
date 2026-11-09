@@ -120,6 +120,16 @@ def test_falls_back_to_artist_title_when_basename_differs(tmp_path):
     assert out["icon"] == "skipped"  # no icon_url configured
 
 
+def test_custom_playlist_name_is_respected(tmp_path):
+    stt = _state(tmp_path, [("Artist", "Title", "/x/incoming/starkeep/Artist - Title.m4a",
+                             "downloaded")])
+    sub = FakeSub(SONGS)
+    out = playlist.sync_audition(sub, stt, name="My Weekly Audition")
+    assert sub.created[-1]["name"] == "My Weekly Audition"
+    assert out["playlist"] == "My Weekly Audition"
+    assert out["songs"] == 1
+
+
 def test_icon_uploaded_for_the_new_playlist_id(tmp_path, monkeypatch):
     stt = _state(tmp_path, [])
     sub = FakeSub(SONGS)

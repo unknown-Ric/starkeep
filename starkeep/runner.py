@@ -63,7 +63,8 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
         st.save(cfg.state_file, stt)
 
         try:  # playlist must not fail the run's bookkeeping
-            pl = playlist.sync_audition(sub, stt, icon_url=cfg.playlist_icon)
+            pl = playlist.sync_audition(sub, stt, icon_url=cfg.playlist_icon,
+                                        name=cfg.playlist_name)
         except Exception as e:
             log.warning("audition playlist sync failed: %s", e)
             pl = {}

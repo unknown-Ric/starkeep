@@ -166,8 +166,10 @@ Plain cron works too (the built-in lock makes overlaps harmless):
 ## Navidrome setup notes
 
 - Add `incoming_dir` to a scanned music folder. Starkeep rebuilds a playlist
-  named `Starkeep Audition` (fixed name) at the end of every `run`; pin it in
-  your player and it is always your current audition list.
+  named `Starkeep Audition` (`playlist_name` in config) at the end of every
+  `run`; pin it in
+  your player and it is always your current audition list. Renaming the key
+  orphans the old playlist on the server — delete that one by hand.
 - After promotion, a rescan is required before the new album appears.
 - Navidrome's scan may briefly show the audition copy and the promoted copy as
   two songs. They are the same file moved; a rescan reconciles it.
