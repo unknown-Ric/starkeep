@@ -10,6 +10,7 @@ from shutil import move
 import mutagen
 
 from . import state as st
+from . import blacklist
 from .config import Config
 from .lastfm import LastfmClient
 from .subsonic import SubsonicClient
@@ -72,7 +73,8 @@ def _audition_age(c: dict, now: dt.datetime) -> int:
 
 
 def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int] | None = None,
-         now: dt.datetime | None = None, expire: bool = True
+         now: dt.datetime | None = None, expire: bool = True,
+         blocklist: list[tuple[str, str]] | None = None
          ) -> tuple[list[tuple[dict, Path]], list[tuple[dict, Path]]]:
     """Pure keep/expire decision over downloaded candidates (no disk changes).
 
@@ -86,9 +88,14 @@ def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int]
     `expire=False` is a promotion-only pass: unstarred candidates are skipped
     entirely — nothing deleted, and the run budget is not consumed, so frequent
     promotion runs cannot bring a cleanup forward.
+
+    `blocklist` (see blacklist.py) deletes immediately on a cleaning pass,
+    even young tracks — it is an explicit keep-out order that must not wait
+    out the audition week. Starred candidates still win: the star is deliberate.
     """
     now = now or st.utcnow_dt()
     incoming_root = Path(cfg.incoming_dir).resolve()
+    blocklist = blocklist or []
     playcounts = playcounts or {}
     keeps: list[tuple[dict, Path]] = []
     deletes: list[tuple[dict, Path]] = []
@@ -108,6 +115,10 @@ def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int]
             continue
         if not expire:
             continue  # promotion pass: only starred candidates may move
+        if blocklist and blacklist.blacklisted(blocklist, c["artist"], c["title"]):
+            c["_expire_reason"] = "blacklisted"
+            deletes.append((c, src))
+            continue
         heard = playcounts.get(_pc_key(c["artist"], c["title"]), 0) >= cfg.min_plays
         if cfg.expiry_runs:
             c["auditions"] = int(c.get("auditions", 0)) + 1
@@ -169,7 +180,7 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
     starred = sub.starred_songs()
     playcounts = sub.playlist_playcounts(cfg.playlist_name) if cfg.expiry_runs else {}
     keeps, deletes = plan(cfg, starred, stt, playcounts=playcounts, now=now,
-                          expire=expire)
+                          expire=expire, blocklist=blacklist.load(cfg.blacklist_file))
 
     if dry_run:
         return {
@@ -213,6 +224,7 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
         src.unlink(missing_ok=True)
         reason = c.pop("_expire_reason", "age")
         c["status"] = "expired"
+        c["expired_at"] = st.utcnow()  # the requeue_after_days cooldown runs from here
         stt["deleted"].append({"path": str(src), "at": st.utcnow()})
         deleted.append(str(src))
         log.info("expired (%s): %s - %s", reason, c["artist"], c["title"])

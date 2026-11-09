@@ -37,6 +37,11 @@ similar_per_seed: 3        # similar tracks per seed (scrobbled) track
 max_strikes: 2             # download failures before a candidate is abandoned
 harvest_days: 7            # scrobble window feeding the harvest; `run --since
                            # YYYY-MM-DD` widens it for one pass
+requeue_after_days: 0      # days before an expired candidate may be harvested
+                           # again (rhythm-based, ignores the scheduler);
+                           # 0 = expired candidates are never proposed again
+blacklist_file: ""         # manual blocklist, see blacklist.py; empty = use
+                           # blacklist.txt next to this file when it exists
 downloader: "ytdlp"        # only 'ytdlp' in v1
 audio_format: "m4a"        # m4a, mp3, opus, flac, ...
 playlist_name: "Starkeep Audition"

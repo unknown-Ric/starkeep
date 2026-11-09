@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from starkeep import harvest, state as st
+from dataclasses import replace
 from tests.conftest import FakeLastfm, FakeSubsonic
 
 
@@ -57,6 +58,62 @@ def test_harvest_never_retries_after_max_strikes(cfg):
 def test_harvest_with_no_scrobbles_is_safe(cfg):
     stt = st.load(cfg.state_file)
     assert harvest.harvest(cfg, FakeLastfm(), FakeSubsonic(), stt) == []
+
+
+def _expired(stt, artist, title, days_ago):
+    import datetime as dt
+    c = st.add_candidate(stt, artist, title, status="expired")
+    c["expired_at"] = (st.utcnow_dt() - dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
+    return c
+
+
+def test_cooldown_releases_expired_candidates_for_reharvest(cfg):
+    lfm = FakeLastfm(seeds=[("Seed", "Song")], similar=[("A", "One")])
+    stt = st.load(cfg.state_file)
+    _expired(stt, "A", "Old", 99)      # cold enough
+    _expired(stt, "B", "Fresh", 1)     # still cooling down
+    cfg = replace(cfg, requeue_after_days=21)
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert picked == [{"artist": "A", "title": "One"}]  # A forgotten -> re-queued
+    assert st.find_candidate(stt, "A", "One")["status"] == "queued"
+    assert st.find_candidate(stt, "B", "Fresh")["status"] == "expired"
+
+
+def test_zero_cooldown_keeps_expired_candidates_config(cfg):
+    lfm = FakeLastfm(seeds=[("Seed", "Song")], similar=[("A", "One")])
+    stt = st.load(cfg.state_file)
+    _expired(stt, "A", "One", 999)
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert picked == []  # permanent rejection: default stays the old behavior
+
+
+def test_expired_without_stamp_is_never_released(cfg):
+    # legacy rows (before the cooldown feature) stay permanently rejected
+    lfm = FakeLastfm(seeds=[("Seed", "Song")], similar=[("A", "One")])
+    stt = st.load(cfg.state_file)
+    c = st.add_candidate(stt, "A", "One", status="expired")  # no expired_at
+    cfg = replace(cfg, requeue_after_days=21)
+
+    assert harvest.harvest(cfg, lfm, FakeSubsonic(), stt) == []
+    assert st.find_candidate(stt, "A", "One")["status"] == "expired"
+
+
+def test_blacklisted_track_is_never_queued(cfg, tmp_path):
+    bl = tmp_path / "blacklist.txt"
+    bl.write_text("Blocked - Song\nDoomed\n", encoding="utf-8")
+    cfg = replace(cfg, blacklist_file=str(bl))
+    lfm = FakeLastfm(seeds=[("Seed", "Song")],
+                     similar=[("Blocked", "Song"), ("Doomed, Others", "Hit"), ("A", "One")])
+    stt = st.load(cfg.state_file)
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert picked == [{"artist": "A", "title": "One"}]
+    assert [c["artist"] for c in stt["candidates"]] == ["A"]
 
 
 def test_cap_zero_is_decide_only(cfg):

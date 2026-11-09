@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import config as config_mod
+from . import blacklist
 from . import reconcile
 from . import runner
 from . import state as st
@@ -95,6 +96,12 @@ def doctor(cfg) -> int:
         print("[FAIL] ffmpeg not on PATH (required for --extract-audio)")
         ok = False
 
+    entries = blacklist.load(cfg.blacklist_file)
+    if cfg.blacklist_file:
+        print(f"[ OK ] blacklist: {len(entries)} entries ({cfg.blacklist_file})")
+    else:
+        print("[INFO] no blacklist — create blacklist.txt next to the config")
+
     for label, value in (("incoming_dir", cfg.incoming_dir),
                          ("library_dir", cfg.library_dir)):
         if value and _writable(Path(value).expanduser()):
@@ -133,17 +140,25 @@ def main() -> None:
     dry_p.add_argument("--cap", type=int, default=None, help="override config cap")
     dry_p.add_argument("--no-expire", action="store_true",
                        help="show what a promotion-only pass would do")
+    forget_p = sub.add_parser("forget", help="remove a candidate from state so it can be re-harvested")
+    forget_p.add_argument("artist", help="artist as shown in the state/playlist")
+    forget_p.add_argument("title", help="title as shown in the state/playlist")
     sub.add_parser("status", help="summary of last run from state.json")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
     args = ap.parse_args()
 
     cfg = config_mod.load(args.config_dir) or config_mod.first_run_setup(args.config_dir)
+    import datetime as dt
+    import datetime as dt
     cfg = cfg.with_api_key()
+    if not cfg.blacklist_file:
+        probe = Path(args.config_dir) / blacklist.FILENAME
+        if probe.is_file():
+            cfg = replace(cfg, blacklist_file=str(probe))
     if getattr(args, "cap", None) is not None:
         cfg = replace(cfg, cap=args.cap)
     if getattr(args, "since", None):
-        import datetime as dt
         try:
             start = dt.date.fromisoformat(args.since)
         except ValueError:
@@ -154,6 +169,16 @@ def main() -> None:
 
     if args.cmd == "status":
         sys.exit(status(cfg))
+    if args.cmd == "forget":
+        config_mod.validate(cfg, require_lastfm=False)  # still want a sane config
+        stt = st.load(cfg.state_file)
+        removed = st.forget_candidate(stt, args.artist, args.title)
+        if removed:
+            st.save(cfg.state_file, stt)
+            print(f"forgot {removed} candidate(s): {args.artist} - {args.title}")
+            sys.exit(0)
+        print(f"no candidate in state matches: {args.artist} - {args.title}", file=sys.stderr)
+        sys.exit(1)
     if args.cmd == "show-state":
         print(json.dumps(st.load(cfg.state_file), indent=2, default=str))
         sys.exit(0)

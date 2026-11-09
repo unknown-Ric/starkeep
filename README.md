@@ -60,6 +60,7 @@ with mode `600`.
 |---|---|
 | `starkeep run` | Full pass: reconcile, promote/expire, harvest, download, rebuild audition playlist |
 | `starkeep dry-run` | Show what would be promoted/deleted; touches nothing |
+| `starkeep forget ARTIST TITLE` | Remove a candidate from state so it can be harvested again |
 | `starkeep status` | Last run, candidate counts, orphans in `incoming/` |
 | `starkeep doctor` | Validate config, connectivity, dependencies |
 | `starkeep show-state` | Raw `state.json` (debugging) |
@@ -204,6 +205,21 @@ important ones:
 **Does it delete music I already own?**
 No. It only deletes files it downloaded itself, recorded in state, inside
 `incoming_dir`. Your existing library is never a deletion candidate.
+
+**How long does an expired track stay rejected?**
+Forever by default (`requeue_after_days: 0`). Set e.g.
+`requeue_after_days: 21` and candidates may come back three cleaning cycles
+after deletion — still never earlier than the *next* cleaning run, and a
+promoted copy in the library always wins (owned-dedupe). To resurrect a
+specific candidate immediately: `starkeep forget ARTIST TITLE`, or delete the
+entry from `state.json`.
+
+**Can I block a song or artist for good?**
+`blacklist.txt` next to the config: `Artist - Title` for one track, or a bare
+`Artist` for any track naming that artist (works inside multi-artist credits
+like `A, B - T`, `A & B`, `A feat. B`). Blacklisted audition tracks are
+deleted on the next cleaning run even if young; blacklisted candidates are
+never harvested.
 
 **I starred a track after it expired.**
 Too late — the audition file is gone and that candidate stays permanently

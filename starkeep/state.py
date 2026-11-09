@@ -132,6 +132,20 @@ def save(state_path: str, st: dict[str, Any]) -> None:
 
 # ---- candidate helpers --------------------------------------------------
 
+def forget_candidate(st: dict, artist: str, title: str) -> int:
+    """Forget a candidate so starkeep treats it as never seen (re-harvestable).
+
+    Removes every row matching the normalized artist+title regardless of
+    status (expired, failed, promoted row removal does NOT touch the promoted
+    library file or the owned-dedupe, which is search3-based). Returns count.
+    """
+    key = candidate_key(artist, title)
+    before = len(st["candidates"])
+    st["candidates"] = [c for c in st["candidates"]
+                        if candidate_key(c["artist"], c["title"]) != key]
+    return before - len(st["candidates"])
+
+
 def candidate_key(artist: str, title: str) -> tuple[str, str]:
     return (artist.strip().casefold(), title.strip().casefold())
 

@@ -174,6 +174,63 @@ def test_promotion_pass_still_promotes_stars(cfg, now):
     assert c["status"] == "promoted"
 
 
+# ---- blacklist on cleaning passes ------------------------------------------
+
+def _blocklisted_cfg(cfg, tmp_path, text):
+    bl = tmp_path / "blacklist.txt"
+    bl.write_text(text, encoding="utf-8")
+    return replace(cfg, blacklist_file=str(bl))
+
+
+def test_blacklisted_audition_track_dies_on_the_next_cleaning_run(cfg, now, tmp_path):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    cfg = _blocklisted_cfg(cfg, tmp_path, "Artist - Title\n")
+    sub = FakeSubsonic(playcounts={"artist|title": 0}) if cfg.expiry_runs else FakeSubsonic()
+
+    result = decide.decide(cfg, sub, FakeLastfm(), stt, now=now)
+
+    assert result["deletes"] == [str(src)]
+    assert not src.exists()
+    assert c["status"] == "expired"
+    assert c["expired_at"]  # stamped for the requeue cooldown
+
+
+def test_blacklisted_starred_track_is_still_promoted(cfg, now, tmp_path):
+    # an explicit star predates the blacklist entry and is honored
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    stars = [{"artist": "Artist", "title": "Title", "path": ""}]
+    cfg = _blocklisted_cfg(cfg, tmp_path, "Artist - Title\n")
+
+    result = decide.decide(cfg, FakeSubsonic(stars), FakeLastfm(), stt, now=now)
+
+    assert len(result["keeps"]) == 1
+    assert c["status"] == "promoted"
+    assert c.get("expired_at") is None
+
+
+def test_blacklist_on_a_promotion_pass_waits_for_the_cleaning_run(cfg, now, tmp_path):
+    stt = st.load(cfg.state_file)
+    _, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    cfg = _blocklisted_cfg(cfg, tmp_path, "Artist - Title\n")
+
+    decide.decide(cfg, FakeSubsonic(), FakeLastfm(), stt, now=now, expire=False)
+
+    assert src.exists()  # promotion pass never deletes; cleaning pass purges
+
+
+def test_blacklist_on_a_young_track_deletes_immediately(cfg, now, tmp_path):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 0.5, now)  # day of download
+    cfg = _blocklisted_cfg(cfg, tmp_path, "Other\n")
+
+    result = decide.decide(cfg, FakeSubsonic(), FakeLastfm(), stt, now=now)
+
+    assert result["deletes"] == []  # not blacklisted (different artist)
+    assert src.exists() and c["status"] == "downloaded"
+
+
 # ---- run-based lifetime (expiry_runs) --------------------------------------
 
 def _runs_cfg(cfg, runs=2, min_plays=1, carry=1):

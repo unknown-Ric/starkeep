@@ -64,3 +64,18 @@ def test_missing_file_below_strike_limit_is_retryable(tmp_path):
     c["file_path"] = str(tmp_path / "gone.m4a")
     c["status"] = "missing"
     assert st.queue_decision(data, "A", "T") == "retry"
+
+
+def test_forget_removes_all_matching_candidates(tmp_path):
+    data = st.load(str(tmp_path / "state.json"))
+    st.add_candidate(data, "A", "T", status="expired")
+    st.add_candidate(data, "A", "OTHER", status="failed")
+    dup = st.add_candidate(data, "  A ", " T", status="queued")  # same, normalized
+
+    assert st.forget_candidate(data, "A", "T") == 2
+    assert st.find_candidate(data, "A", "OTHER")["status"] == "failed"
+
+
+def test_forget_nothing_removes_nothing(tmp_path):
+    data = st.load(str(tmp_path / "state.json"))
+    assert st.forget_candidate(data, "Nobody", "Nowhere") == 0

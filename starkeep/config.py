@@ -46,6 +46,12 @@ class Config:
     downloader: str = "ytdlp"     # only "ytdlp" supported for now (MeTube later)
     audio_format: str = "m4a"
     harvest_days: int = 7         # scrobble window feeding the harvest
+    # Days before an expired candidate becomes harvestable again. 0 = the old
+    # permanent rejection (never add back); e.g. 21 = one Monday cycle of 3.
+    requeue_after_days: int = 0
+    # Manual blocklist, parsed by blacklist.py. Empty = use blacklist.txt next
+    # to the config file if it exists. "no.txt" disables the feature entirely.
+    blacklist_file: str = ""
     # Navidrome-native playlist cover: the repo logo (PNG). Any PNG/JPEG/
     # WEBP/GIF/SVG URL can substitute it (SVG is rasterized server-side, needs
     # cairosvg); empty string disables the upload entirely.
@@ -150,6 +156,8 @@ def validate(cfg: Config, require_lastfm: bool = True) -> list[str]:
         problems.append("max_strikes must be >= 1")
     if cfg.harvest_days < 1:
         problems.append("harvest_days must be >= 1")
+    if cfg.requeue_after_days < 0:
+        problems.append("requeue_after_days must be >= 0 (0 = never requeue)")
     if cfg.downloader != "ytdlp":
         problems.append("downloader must be 'ytdlp' in v1")
     if not cfg.playlist_name.strip():

@@ -5,11 +5,40 @@ from __future__ import annotations
 import logging
 
 from . import state as st
+from . import blacklist
 from .config import Config
 from .lastfm import LastfmClient
 from .subsonic import SubsonicClient
 
 log = logging.getLogger(__name__)
+
+
+def release_expired(cfg: Config, stt: dict) -> int:
+    """Drop expired candidates whose requeue_after_days cooldown has passed.
+
+    Drops them from state so they read as *never seen*: the next harvest may
+    propose them again like any fresh candidate (library dedupe still guards
+    anything promoted). With requeue_after_days == 0 or no expired_at stamp,
+    nothing changes — old records stay permanently rejected.
+    """
+    cooldown = cfg.requeue_after_days
+    if cooldown <= 0:
+        return 0
+    now = st.utcnow_dt()
+    keep: list[dict] = []
+    released: list[str] = []
+    for c in stt["candidates"]:
+        ts = c.get("expired_at")
+        if c.get("status") == "expired" and ts:
+            age = st.days_since(ts, now)
+            if 0 <= age >= cooldown:
+                released.append(f'{c["artist"]} - {c["title"]}')
+                continue  # cold enough: forget it, harvest may re-propose
+        keep.append(c)
+    if released:
+        stt["candidates"] = keep
+        log.info("requeued after %dd cooldown: %s", cooldown, ", ".join(released))
+    return len(released)
 
 
 def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> list[dict]:
@@ -27,6 +56,8 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
         return []
     if cfg.cap <= 0:  # --cap 0 = decide-only smoke run
         return []
+    release_expired(cfg, stt)
+    blocklist = blacklist.load(cfg.blacklist_file)
 
     proposed: list[tuple[str, str]] = []
     for artist, title in seeds[:10]:
@@ -43,6 +74,10 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
         if key in seen:
             continue
         seen.add(key)
+
+        if blacklist.blacklisted(blocklist, artist, title):
+            log.info("blacklisted, skipping: %s - %s", artist, title)
+            continue
 
         decision = st.queue_decision(stt, artist, title, cfg.max_strikes)
         if decision == "skip":
