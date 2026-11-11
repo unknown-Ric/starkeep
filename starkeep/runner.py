@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 
 from . import decide, download, harvest, playlist, reconcile
+from . import report as report_mod
 from . import state as st
 from .config import Config
 from .lastfm import LastfmClient
@@ -102,13 +103,7 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             log.warning("audition playlist sync failed: %s", e)
             pl = {}
 
-        log.info(
-            "run done: %d candidates, %d downloaded, %d promoted, %d deleted, %d orphans, playlist %s",
-            len(candidates), downloaded, len(decision["keeps"]),
-            len(decision["deletes"]), len(report["orphans"]),
-            pl.get("songs", "unchanged"),
-        )
-        return {
+        result = {
             "candidates": len(candidates),
             "downloaded": downloaded,
             "promoted": decision["keeps"],
@@ -116,3 +111,15 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             "orphans": report["orphans"],
             "playlist": pl,
         }
+        try:  # a broken snapshot must not fail the run
+            result["report"] = report_mod.write(cfg, stt, report["orphans"])
+        except Exception as e:
+            log.warning("status.html render failed: %s", e)
+
+        log.info(
+            "run done: %d candidates, %d downloaded, %d promoted, %d deleted, %d orphans, playlist %s",
+            len(candidates), downloaded, len(decision["keeps"]),
+            len(decision["deletes"]), len(report["orphans"]),
+            pl.get("songs", "unchanged"),
+        )
+        return result

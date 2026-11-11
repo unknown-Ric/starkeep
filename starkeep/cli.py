@@ -14,6 +14,7 @@ import requests
 from . import config as config_mod
 from . import blacklist
 from . import reconcile
+from . import report
 from . import runner
 from . import state as st
 from .lastfm import LastfmClient
@@ -31,6 +32,8 @@ def status(cfg) -> int:
             print(f"  {name:<14}: {count}")
     print(f"moves recorded  : {len(stt.get('moved', []))}")
     print(f"deletes recorded: {len(stt.get('deleted', []))}")
+    if report.report_path(cfg).is_file():
+        print(f"status snapshot : {report.report_path(cfg)}")
 
     report = reconcile.scan(cfg, stt)
     if report["orphans"]:

@@ -69,6 +69,11 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
 `run` and `dry-run` also accept `--cap N`; `run --cap 0` is a decide-only pass
 (promote/expire without downloading anything).
 
+Every `run` also renders a **static `status.html`** next to `state.json`:
+what is auditioning, expiry dates, recently promoted tracks, orphans. No
+server, no credentials, no JavaScript — open it directly or serve it with
+anything you already run (`python -m http.server`, nginx, …).
+
 A **spot run** outside the schedule is just `starkeep run` (the pipeline is
 idempotent and lock-protected, so extra runs are safe). Use `--since
 YYYY-MM-DD` to widen the scrobble window for that one pass — e.g. after a busy
