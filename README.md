@@ -154,13 +154,28 @@ resets — that is a server limitation.
 
 The recommended rhythm is two schedules (see "Run types"):
 
-- **weekly cleaning + download** — `deploy/starkeep.{service,timer}`, Monday
-  morning
-- **frequent promotion** — `deploy/starkeep-promote.{service,timer}`, every
-  4 h, `run --cap 0 --no-expire`
+- **weekly cleaning + download** — Monday morning, `starkeep run`
+- **frequent promotion** — every 4 h, `starkeep run --cap 0 --no-expire`
 
-systemd units are in [`deploy/`](deploy/): install both, adjust `User`,
-`WorkingDirectory` and `ExecStart`, put the API key in `/etc/starkeep.env`:
+**Plain per-user cron needs no sudo at all** (the built-in lock makes overlaps
+harmless). If you installed with pipx:
+
+```cron
+17 4 * * 1     cd /etc/starkeep && . /etc/starkeep.env && starkeep run
+17 */4 * * *   cd /etc/starkeep && . /etc/starkeep.env && starkeep run --cap 0 --no-expire
+```
+
+On Docker (see below), your own crontab schedules the container — no root
+service, no systemd units to install:
+
+```cron
+17 4 * * 1     cd /opt/starkeep && docker compose run --rm starkeep run
+17 */4 * * *   cd /opt/starkeep && docker compose run --rm starkeep run --cap 0 --no-expire
+```
+
+If you prefer systemd (bare-metal installs), units are in
+[`deploy/`](deploy/): install both with sudo, adjust `User`, `WorkingDirectory`
+and `ExecStart`, and put the API key in `/etc/starkeep.env`:
 
 ```ini
 LASTFM_API_KEY=...
@@ -177,13 +192,6 @@ sudo systemctl enable --now starkeep.timer starkeep-promote.timer
 
 The timers are templates — edit `OnCalendar` to move Monday or change the
 promotion cadence; the audition lifetime is the `expiry_days` config key.
-
-Plain cron works too (the built-in lock makes overlaps harmless):
-
-```cron
-17 4 * * 1     cd /etc/starkeep && . /etc/starkeep.env && starkeep run
-17 */4 * * *   cd /etc/starkeep && . /etc/starkeep.env && starkeep run --cap 0 --no-expire
-```
 
 ## Navidrome setup notes
 
@@ -307,34 +315,27 @@ pipx upgrade yt-dlp    # or: pip install -U yt-dlp
 
 ## Docker
 
-The Navidrome crowd usually runs containers, so:
+The repo ships a `Dockerfile` (ffmpeg + yt-dlp included) and a
+`docker-compose.yml` that mounts `./config` (holds `config.yaml`, `state.json`,
+logs) and your music root:
 
-```dockerfile
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-COPY . /src
-RUN pip install --no-cache-dir /src yt-dlp
-WORKDIR /config
-ENTRYPOINT ["starkeep"]
-CMD ["run", "--config-dir", "/config"]
+```bash
+cp .env.example .env      # then fill in the secrets; .env is gitignored
+cd /music && docker compose run --rm starkeep doctor   # first-run setup
 ```
 
-```yaml
-services:
-  starkeep:
-    build: .
-    environment:
-      LASTFM_API_KEY: "..."
-      SUBSONIC_PASSWORD: "..."
-    volumes:
-      - ./config:/config          # config.yaml, state.json, logs
-      - /music:/music             # incoming_dir + library_dir inside here
-```
+All subcommands work the same way, e.g.
+`docker compose run --rm starkeep status` or
+`docker compose run --rm starkeep run --cap 0 --no-expire`.
+Schedule the runs from **your own crontab** (see Scheduling) — no root
+service needed. If files created in `incoming_dir` end up owned by root and
+Navidrome cannot star them, add `user: "1000:1000"` to the compose service.
 
 ## Roadmap
 
-Only if there is demand: read-only status page, ntfy run notifications, MeTube
+Only if there is demand: a small web UI (guided first-run setup, config
+editing, `status`/`dry-run` at a click — the pipeline is complex enough to
+deserve it), read-only status page, ntfy run notifications, MeTube
 as an alternative downloader, ListenBrainz seeds, multiple sources. No plans to
 become a Lidarr replacement or to manage whole albums.
 

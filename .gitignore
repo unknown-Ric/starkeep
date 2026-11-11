@@ -1,6 +1,7 @@
 starkeep-plan.md
 state.json
 config.yaml
+.env
 *.log
 .venv/
 __pycache__/

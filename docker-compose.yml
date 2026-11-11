@@ -1,0 +1,9 @@
+services:
+  starkeep:
+    build: .
+    env_file: .env            # secrets live here, never committed
+    volumes:
+      - ./config:/config      # config.yaml, state.json, logs
+      - /music:/music         # incoming_dir + library_dir must live inside here
+    # The container is not long-running: schedule it from your own crontab
+    # (README "Docker"), e.g.  docker compose run --rm starkeep run
