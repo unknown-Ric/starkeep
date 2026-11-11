@@ -14,7 +14,7 @@ from pathlib import Path
 import requests
 
 from . import state as st
-from .subsonic import SubsonicClient, _norm
+from .subsonic import SubsonicClient, _norm, _strip_feat
 
 log = logging.getLogger(__name__)
 AUDITION_NAME = "Starkeep Audition"  # default; override via config.playlist_name
@@ -30,9 +30,11 @@ def _song_id_for(sub: SubsonicClient, cand: dict) -> str | None:
     """
     basename = Path(cand.get("file_path") or "").name.casefold()
     by_basename = by_name = None
+    fa, ft = _strip_feat(cand["artist"]), _strip_feat(cand["title"])
     for s in sub.search_songs(cand["artist"], cand["title"]):
-        if _norm(s.get("artist")) != _norm(cand["artist"]) \
-                or _norm(s.get("title")) != _norm(cand["title"]):
+        sa, ss = _norm(s.get("artist")), _norm(s.get("title"))
+        if not ((sa == _norm(cand["artist"]) and ss == _norm(cand["title"]))
+                or (_strip_feat(s.get("artist")) == fa and _strip_feat(s.get("title")) == ft)):
             continue
         by_name = by_name if by_name is not None else s["id"]
         if basename and Path(s.get("path") or "").name.casefold() == basename:

@@ -9,7 +9,8 @@ lastfm_api_key: ""         # prefer the LASTFM_API_KEY env var instead of storin
 # Subsonic / Navidrome
 subsonic_url: "http://localhost:4533"
 subsonic_user: ""
-subsonic_password: ""
+subsonic_password: ""      # or set SUBSONIC_PASSWORD in the environment instead
+                           # (recommended: a dedicated, non-admin Navidrome user)
 # Token auth is computed per request; no md5 password setting is needed.
 
 # Paths (absolute)
@@ -43,7 +44,9 @@ requeue_after_days: 0      # days before an expired candidate may be harvested
 blacklist_file: ""         # manual blocklist, see blacklist.py; empty = use
                            # blacklist.txt next to this file when it exists
 downloader: "ytdlp"        # only 'ytdlp' in v1
-audio_format: "m4a"        # m4a, mp3, opus, flac, ...
+audio_format: "m4a"        # m4a, mp3, opus, flac, ... — or "native" to keep the
+                           # stream exactly as YouTube serves it (no re-encode;
+                           # see README for the audio-quality trade-offs)
 playlist_name: "Starkeep Audition"
                            # the playlist starkeep manages (delete + recreate
                            # every run). Players pin it by this name; if you
@@ -55,3 +58,7 @@ playlist_icon: "https://raw.githubusercontent.com/unknown-Ric/starkeep/main/star
                            # Substitute: any PNG/JPEG/WEBP/GIF/SVG URL (SVG is
                            # rasterized to PNG automatically, needs cairosvg).
                            # Remove: "" disables the cover upload.
+
+# Cron monitoring (healthchecks.io style): a successful `run` GETs this URL,
+# a failed one GETs <url>/fail. Empty = disabled.
+ping_url: ""

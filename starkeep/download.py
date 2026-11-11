@@ -33,6 +33,21 @@ def yt_search_query(artist: str, title: str) -> str:
     return f"ytsearch1:{artist} - {title} audio"
 
 
+_VERSION_WORDS = re.compile(r"(?i)\b(live|cover|remix|karaoke|instrumental|acoustic)\b")
+
+
+def _match_filters(artist: str, title: str, duration: int | None) -> str | None:
+    """Reject obvious wrong-version uploads (live/cover/...) before they cost
+    a download, and clamp the length to the official track's ±35% (the Last.fm
+    duration is also a cheap guard against picking a 2h compilation upload)."""
+    filters = []
+    if not _VERSION_WORDS.search(f"{artist} {title}"):
+        filters.append(r"title!~=(?i)\b(live|cover|remix|karaoke|instrumental|acoustic)\b")
+    if duration and duration > 30:
+        filters.append(f"duration>={int(duration * 0.65)}&duration<={int(duration * 1.35)}")
+    return "&".join(filters) or None
+
+
 def _read_report(report: Path) -> Path | None:
     """yt-dlp's `--print-to-file after_move:filepath` writes the final path."""
     try:
@@ -81,15 +96,18 @@ def apply_basic_tags(path: Path, artist: str, title: str) -> bool:
         return False
 
 
-def apply_full_tags(path: Path, artist: str, title: str, lfm) -> bool:
+def apply_full_tags(path: Path, artist: str, title: str, lfm,
+                    info: dict | None = None) -> bool:
     """Full tags BEFORE the audition week: real artist/title/album/track# plus
     album art (Deezer high-res -> Last.fm album image), falling back to the
     yt-dlp thumbnail when both lookups miss. Never fatal: the download is kept.
+    `info` may be a pre-fetched track_album_info() result (avoids a second call).
     """
     if not apply_basic_tags(path, artist, title):
         return False
     try:
-        info = (lfm.track_album_info(artist, title) if lfm else None) or {}
+        if not info:
+            info = (lfm.track_album_info(artist, title) if lfm else None) or {}
         m = mutagen.File(path, easy=True)
         if m is not None:
             if info.get("album"):
@@ -170,8 +188,13 @@ def _existing_file(incoming: Path, stem: str) -> Path | None:
     return max(matches, key=lambda p: p.stat().st_mtime) if matches else None
 
 
-def download(cfg: Config, artist: str, title: str) -> Path:
-    """Download exactly one track into incoming/. Returns the file actually written."""
+def download(cfg: Config, artist: str, title: str, duration: int | None = None) -> Path:
+    """Download exactly one track into incoming/. Returns the file actually written.
+
+    `duration` (official seconds, from Last.fm) activates the wrong-version
+    length filter. `audio_format: native` keeps the stream YouTube serves,
+    i.e. no second lossy re-encode (it is still YouTube-grade audio).
+    """
     if not YTDLP:
         raise RuntimeError("yt-dlp not found on PATH")
     incoming = Path(cfg.incoming_dir)
@@ -186,15 +209,19 @@ def download(cfg: Config, artist: str, title: str) -> Path:
     before = {p for p in incoming.iterdir() if p.is_file()}
     report = incoming / f".starkeep-{uuid.uuid4().hex}.path"
 
+    audio_format = "best" if cfg.audio_format == "native" else cfg.audio_format
     cmd = [
         YTDLP,
-        "--extract-audio", "--audio-format", cfg.audio_format, "--audio-quality", "0",
+        "--extract-audio", "--audio-format", audio_format, "--audio-quality", "0",
         "--embed-thumbnail", "--convert-thumbnails", "jpg",
         "-o", str(incoming / f"{stem}.%(ext)s"),
         "--no-playlist", "--quiet", "--no-warnings",
         "--print-to-file", "after_move:filepath", str(report),
-        yt_search_query(artist, title),
     ]
+    mf = _match_filters(artist, title, duration)
+    if mf:
+        cmd += ["--match-filters", mf]
+    cmd.append(yt_search_query(artist, title))
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if result.returncode != 0:
@@ -214,8 +241,10 @@ def download_all(cfg: Config, candidates: list[dict], stt: dict,
     for cand in candidates:
         artist, title = cand["artist"], cand["title"]
         try:
-            path = download(cfg, artist, title)
-            apply_full_tags(path, artist, title, lfm)
+            # one Last.fm call feeds both the length filter and the tags
+            info = lfm.track_album_info(artist, title) if lfm else None
+            path = download(cfg, artist, title, duration=(info or {}).get("duration"))
+            apply_full_tags(path, artist, title, lfm, info=info)
             c = st.find_candidate(stt, artist, title)
             if c:
                 c["status"] = "downloaded"

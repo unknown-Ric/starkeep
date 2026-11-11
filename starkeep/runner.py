@@ -29,6 +29,29 @@ def setup_logging(cfg: Config) -> None:
     )
 
 
+def _restar_promoted(sub: SubsonicClient, stt: dict, promoted: list) -> int:
+    """Moving the file creates a new server song: the star (and its playlist
+    membership) does not follow. Re-apply the star after the scan so users get
+    their star back without a manual step."""
+    by_src = {c.get("file_path"): c for c in stt["candidates"]}
+    re_starred = 0
+    for mv in stt.get("moved", []):
+        c = by_src.get(mv.get("from"))
+        if not c or mv.get("to") not in promoted:
+            continue
+        try:
+            sid = playlist._song_id_for(
+                sub, {"artist": c["artist"], "title": c["title"], "file_path": mv["to"]})
+            if sid:
+                sub.star(sid)
+                re_starred += 1
+        except Exception as e:
+            log.warning("re-star failed for %s - %s: %s", c["artist"], c["title"], e)
+    if re_starred:
+        log.info("re-starred %d promoted track(s)", re_starred)
+    return re_starred
+
+
 def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
     setup_logging(cfg)
     with st.StateLock(cfg.state_file):  # prevent overlapping cron runs
@@ -61,6 +84,16 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
         candidates = harvest.harvest(cfg, lfm, sub, stt)
         downloaded = download.download_all(cfg, candidates, stt, lfm)
         st.save(cfg.state_file, stt)
+
+        # New files (promoted + this week's downloads) have no server song id
+        # until a scan runs. Trigger it and wait, so the audition playlist can
+        # reference this run's files right away instead of lagging a week.
+        if not dry_run and (decision["keeps"] or downloaded):
+            try:
+                sub.wait_for_scan()
+            except Exception as e:
+                log.warning("scan trigger failed (needs a Navidrome-compatible server): %s", e)
+            _restar_promoted(sub, stt, decision["keeps"])
 
         try:  # playlist must not fail the run's bookkeeping
             pl = playlist.sync_audition(sub, stt, icon_url=cfg.playlist_icon,

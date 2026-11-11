@@ -59,13 +59,20 @@ class Config:
     # The playlist starkeep deletes+recreates every run — players pin it by
     # this name. Changing it orphans the old playlist: delete it manually.
     playlist_name: str = "Starkeep Audition"
+    # Cron monitoring (healthchecks.io style): GET on success, GET /fail on
+    # error. Empty = disabled.
+    ping_url: str = ""
 
     def with_api_key(self) -> "Config":
-        if not self.lastfm_api_key:
-            env = os.environ.get("LASTFM_API_KEY", "")
-            if env:
-                return replace(self, lastfm_api_key=env)
-        return self
+        # credentials may live in the environment instead of config.yaml
+        env_key = os.environ.get("LASTFM_API_KEY", "")
+        env_pw = os.environ.get("SUBSONIC_PASSWORD", "")
+        updates = {}
+        if not self.lastfm_api_key and env_key:
+            updates["lastfm_api_key"] = env_key
+        if not self.subsonic_password and env_pw:
+            updates["subsonic_password"] = env_pw
+        return replace(self, **updates) if updates else self
 
 
 def config_path(directory: str | Path) -> Path:

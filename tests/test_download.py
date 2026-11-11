@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from starkeep import download, state as st
@@ -191,8 +192,60 @@ def test_download_all_passes_lfm_into_full_tags(cfg, monkeypatch):
     monkeypatch.setattr(download, "YTDLP", "yt-dlp")
     monkeypatch.setattr(download.subprocess, "run", _fake_ytdlp)
     seen = {}
+
+    class FakeLfm:
+        def track_album_info(self, artist, title):
+            return {}
+
     monkeypatch.setattr(download, "apply_full_tags",
-                        lambda path, artist, title, lfm: seen.setdefault("lfm", lfm) or True)
+                        lambda path, artist, title, lfm, info=None:
+                        seen.setdefault("lfm", lfm) or True)
     stt = st.load(cfg.state_file)
-    download.download_all(cfg, [{"artist": "Artist", "title": "Title"}], stt, lfm="LFM")
-    assert seen["lfm"] == "LFM"
+    download.download_all(cfg, [{"artist": "Artist", "title": "Title"}], stt, lfm=FakeLfm())
+    assert isinstance(seen["lfm"], FakeLfm)
+
+
+def test_download_filters_wrong_versions(cfg, monkeypatch):
+    """No live/cover/remix junk, and the length must fit the official track."""
+    seen = {}
+
+    def fake(cmd, capture_output=True, text=True, timeout=0):
+        seen["cmd"] = cmd
+        template = Path(cmd[cmd.index("-o") + 1])
+        written = Path(str(template).replace("%(ext)s", "m4a"))
+        written.write_bytes(b"audio")
+        report = Path(cmd[cmd.index("--print-to-file") + 2])
+        report.write_text(str(written), encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(download, "YTDLP", "yt-dlp")
+    monkeypatch.setattr(download.subprocess, "run", fake)
+
+    download.download(cfg, "Artist", "Title", duration=240)
+    flt = seen["cmd"][seen["cmd"].index("--match-filters") + 1]
+    assert "title!~=" in flt
+    assert "duration>=156" in flt and "duration<=324" in flt
+
+    # the candidate itself mentions the word: filtering would reject every hit
+    download.download(cfg, "Artist", "Title (Live)")
+    assert "--match-filters" not in seen["cmd"]  # no keyword filter, no duration known
+
+
+def test_download_native_format_keeps_youtube_stream(cfg, monkeypatch):
+    seen = {}
+
+    def fake(cmd, capture_output=True, text=True, timeout=0):
+        seen["cmd"] = cmd
+        template = Path(cmd[cmd.index("-o") + 1])
+        written = Path(str(template).replace("%(ext)s", "m4a"))
+        written.write_bytes(b"audio")
+        report = Path(cmd[cmd.index("--print-to-file") + 2])
+        report.write_text(str(written), encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(download, "YTDLP", "yt-dlp")
+    monkeypatch.setattr(download.subprocess, "run", fake)
+
+    native_cfg = replace(cfg, audio_format="native")
+    download.download(native_cfg, "Artist", "Title")
+    assert "best" in seen["cmd"]

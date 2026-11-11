@@ -75,6 +75,8 @@ class LastfmClient:
                 out["album"] = album["title"]
             if album and album.get("@attr", {}).get("position"):
                 out["track_number"] = int(album["@attr"]["position"])
+            if info.get("duration"):  # milliseconds -> seconds
+                out["duration"] = int(info["duration"]) // 1000
             for size in ("mega", "extralarge"):
                 img = next((i.get("#text") for i in album.get("image") or []
                             if isinstance(i, dict) and i.get("size") == size and i.get("#text")), None)

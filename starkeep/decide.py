@@ -13,7 +13,7 @@ from . import state as st
 from . import blacklist
 from .config import Config
 from .lastfm import LastfmClient
-from .subsonic import SubsonicClient
+from .subsonic import SubsonicClient, _norm, _strip_feat
 
 
 log = logging.getLogger(__name__)
@@ -22,10 +22,6 @@ log = logging.getLogger(__name__)
 def _pc_key(artist: str, title: str) -> str:
     """Key matching subsonic.playlist_playcounts()."""
     return _norm(artist) + "|" + _norm(title)
-
-
-def _norm(text: str | None) -> str:
-    return " ".join((text or "").casefold().split())
 
 
 def _under(path: Path, root: Path) -> bool:
@@ -43,10 +39,15 @@ def starred_match(candidate: dict, starred: list[dict]) -> bool:
     pass ran, and servers whose starred path is relative to a music folder.
     """
     artist, title = _norm(candidate.get("artist")), _norm(candidate.get("title"))
+    fa, ft = _strip_feat(candidate.get("artist")), _strip_feat(candidate.get("title"))
     file_path = candidate.get("file_path")
     basename = Path(file_path).name.casefold() if file_path else ""
     for song in starred:
-        if _norm(song.get("artist")) == artist and _norm(song.get("title")) == title:
+        sa, ss = _norm(song.get("artist")), _norm(song.get("title"))
+        if sa == artist and ss == title:
+            return True
+        # guest-credit variants: "Title (feat. B)" vs "Title"
+        if _strip_feat(song.get("artist")) == fa and _strip_feat(song.get("title")) == ft:
             return True
         song_path = song.get("path") or ""
         if basename and Path(song_path).name.casefold() == basename:

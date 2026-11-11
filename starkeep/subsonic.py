@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import re
 import secrets
+import time
+import unicodedata
 
 import requests
 
@@ -13,7 +16,17 @@ log = logging.getLogger(__name__)
 
 
 def _norm(text: str | None) -> str:
-    return " ".join((text or "").casefold().split())
+    # NFKC folds fullwidth/compatibility chars (Ａrtist == Artist); casefold+split
+    # handles case and stray whitespace. Diacritics are deliberately NOT folded:
+    # artists like "Beyoncé" vs "Beyonce" are usually different entries.
+    return " ".join(unicodedata.normalize("NFKC", text or "").casefold().split())
+
+
+_FEAT = re.compile(r"(?i)[(\[,]? *\b(?:feat|ft)\.?(?: |\b)")
+
+def _strip_feat(text: str | None) -> str:
+    """'Song (feat. B)' -> 'Song' — Last.fm and YouTube credit guests differently."""
+    return _FEAT.split(_norm(text), maxsplit=1)[0].strip()
 
 
 class SubsonicClient:
@@ -78,8 +91,10 @@ class SubsonicClient:
         )
         songs = data.get("searchResult3", {}).get("song", [])
         want_a, want_t = _norm(artist), _norm(title)
+        fa, ft = _strip_feat(artist), _strip_feat(title)
         return any(
-            _norm(s.get("artist")) == want_a and _norm(s.get("title")) == want_t
+            (_norm(s.get("artist")) == want_a and _norm(s.get("title")) == want_t)
+            or (_strip_feat(s.get("artist")) == fa and _strip_feat(s.get("title")) == ft)
             for s in songs
         )
 
@@ -102,6 +117,36 @@ class SubsonicClient:
 
     def unstar(self, song_id: str) -> None:
         self._call("unstar", id=song_id)
+
+    def star(self, song_id: str) -> None:
+        self._call("star", id=song_id)
+
+    # ---- library scan (Navidrome extensions; other servers: no-op) ----------
+
+    def start_scan(self) -> bool:
+        """Kick off a library scan so new files get song ids. False if unsupported."""
+        try:
+            self._call("startScan")
+            return True
+        except RuntimeError as e:
+            log.info("server does not support startScan (Navidrome extension): %s", e)
+            return False
+
+    def wait_for_scan(self, timeout: float = 180.0) -> bool:
+        """Trigger a scan and block until it finishes (needed before the
+        audition playlist can reference freshly downloaded files)."""
+        if not self.start_scan():
+            return False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            try:
+                if not self._call("getScanStatus").get("scanStatus", {}).get("scanning"):
+                    return True
+            except RuntimeError:
+                return False
+        log.warning("library scan still running after %.0fs; continuing", timeout)
+        return False
 
     # ---- audition playlist -------------------------------------------------
 

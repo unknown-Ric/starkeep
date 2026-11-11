@@ -80,15 +80,26 @@ starkeep run --since 2026-10-01
 
 ## How "star to keep" works
 
-1. **Harvest** — next week's most-played distinct tracks seed Last.fm
+1. **Harvest** — last week's most-played distinct tracks seed Last.fm
    `track.getSimilar`; results are deduped against your actual library
    (`search3`) and previously seen candidates, then capped.
 2. **Download** — `yt-dlp` fetches one match per candidate
-   (`ytsearch1:Artist - Title audio`) into `incoming/`. The file is retagged
+   (`ytsearch1:Artist - Title audio`) into `incoming/`. Obvious wrong-version
+   uploads are filtered out before they cost a download: video titles
+   containing live/cover/remix/karaoke/instrumental/acoustic are rejected
+   (unless the candidate title itself contains the word), and the length must
+   fit the official track's duration from Last.fm (±35%). The file is retagged
    immediately with the real artist/title/album/track number (Last.fm), so
    Navidrome shows full info during the audition week and stars can be matched
    back reliably. Cover art: Deezer album art (1000px, exact artist+title match
    only) → Last.fm album image → the video thumbnail as last resort.
+
+   Audio is YouTube-grade, not CD-grade. YouTube serves lossy audio (typically
+   Opus or AAC); converting it to `m4a`/`mp3` adds a second lossy pass, and
+   `flac` is just a lossless container around that lossy source — it will not
+   restore quality. Set `audio_format: native` to keep the stream exactly as
+   YouTube serves it (no re-encode at all), or keep the `m4a` default for
+   maximum player compatibility.
 3. **Audition** — the **`Starkeep Audition`** playlist is rebuilt at the end of
    every run to match `incoming/` exactly (promoted and expired tracks drop out
    automatically). Listen in any Subsonic app and star what you want to keep
@@ -106,8 +117,17 @@ starkeep run --since 2026-10-01
    playCount), with `carry_over_runs` extra passes for tracks never played.
    Promotion passes never delete and never consume the budget.
 
-Promotion only appears in Navidrome after its next library scan. Configure a
-scan schedule (or trigger one from a hook) that runs after `starkeep run`.
+Promotion only appears in Navidrome after its next library scan. Starkeep
+triggers a scan itself (`startScan`, waits for `getScanStatus`) before
+rebuilding the audition playlist, so this week's files and promoted tracks are
+in the playlist immediately on Navidrome. Other Subsonic servers without
+`startScan` need their own scan schedule/hook (e.g. a cron `scan` job), or the
+playlist lags by one run.
+
+Promotion moves the file, so Navidrome treats it as a new song: star and play
+count do not follow automatically. Starkeep re-stars the promoted copy after
+the scan (the star you gave the audition track is re-applied); the play count
+resets — that is a server limitation.
 
 ## Safety invariants (promises, not suggestions)
 
@@ -144,6 +164,7 @@ systemd units are in [`deploy/`](deploy/): install both, adjust `User`,
 
 ```ini
 LASTFM_API_KEY=...
+SUBSONIC_PASSWORD=...
 ```
 
 ```bash
@@ -193,12 +214,16 @@ important ones:
   (`--no-expire`) never delete and never consume a budget
 - `max_strikes` — download failures before permanent skip (default 2)
 - `harvest_days` — scrobble window feeding the harvest (default 7)
+- `audio_format` — `m4a` (default), `mp3`, `opus`, `flac`, `native` (no
+  re-encode, keeps the YouTube stream as-is; see the note above)
+- `ping_url` — healthchecks.io-style cron monitoring: a successful `run` GETs
+  the URL, a failed one GETs `<url>/fail`. Empty = disabled. A quiet cron
+  failure otherwise means "no new music" and no signal.
 - `playlist_icon` — cover art for the `Starkeep Audition` playlist (Navidrome
   native API, requires Navidrome ≥ the 2026-03 release); defaults to the repo
   logo PNG (`raw.githubusercontent.com/.../starkeep-logo.png`). Substitute it
   with any image URL (an SVG URL works too — it gets rasterized, needs
   `pip install cairosvg`), or set `""` to keep whatever cover the server has
-- `audio_format` — `m4a` (default), `mp3`, `opus`, `flac`, …
 
 ## FAQ
 
@@ -222,13 +247,24 @@ deleted on the next cleaning run even if young; blacklisted candidates are
 never harvested.
 
 **I starred a track after it expired.**
-Too late — the audition file is gone and that candidate stays permanently
-rejected. Remove its entry from `state.json` (or reset the whole file) if you
-want another attempt.
+Too late — the audition file is gone and that candidate stays rejected
+(`requeue_after_days: 0`). Two ways to soften that failure mode: set
+`requeue_after_days: 21` so expired candidates may come back three cleaning
+cycles later (never earlier than the next cleaning run, and a promoted library
+copy always wins), or switch to the run-based budget (`expiry_runs`) which
+only expires a track once it was actually heard. To resurrect a specific
+candidate immediately: `starkeep forget ARTIST TITLE`, or remove its entry
+from `state.json`.
 
 **The download is the wrong version (live/cover/remix).**
-Let it expire, or delete it and remove the candidate from `state.json`. Audio
-bias reduces but cannot eliminate bad matches.
+Cheap guards are built in: YouTube videos whose title contains
+live/cover/remix/karaoke/instrumental/acoustic are skipped during the search
+(unless the candidate title itself contains the word), and the file's length
+must fit the official track's Last.fm duration (±35%). Auto-generated
+"Artist - Topic" channels usually win such searches on their own, but the
+filter is title-based, not channel-based. What slips through: let it expire,
+or delete it and remove the candidate from `state.json`. The audition week is
+the human filter for the rest.
 
 **Can I run it more than once a week?**
 Yes — that is the point of promotion passes: `run --no-expire` is safe at any
@@ -238,12 +274,63 @@ when the `expiry_days` tick is spent, not how long tracks audition:
 Monday's candidates die at the next Monday run.
 
 **Does it work with Airsonic/other Subsonic servers?**
-The client uses `ping`, `search3`, `getStarred2`, `unstar`, and
-`getPlaylists`/`createPlaylist`/`deletePlaylist` (audition playlist) — all
-standard Subsonic endpoints. Navidrome is the tested target.
+The client uses `ping`, `search3`, `getStarred2`, `star`, `unstar`, and
+`getPlaylists`/`createPlaylist`/`deletePlaylist` (audition playlist), plus the
+Navidrome extensions `startScan`/`getScanStatus` (skipped gracefully on
+servers without them). All standard endpoints. Navidrome is the tested target.
 
 **Multiple users?**
 No. One config, one Navidrome user, one host — a personal-homelab tool.
+
+## Credentials
+
+The Subsonic password lives in `config.yaml` (mode `600`) or, preferably, in
+the environment: `SUBSONIC_PASSWORD` is picked up automatically. Use a
+**dedicated, non-admin Navidrome user** for starkeep — it only needs the
+normal Subsonic endpoints and its own star/playlist state.
+
+## Legal note
+
+Downloading audio from YouTube via `yt-dlp` conflicts with YouTube's terms of
+service and may raise copyright issues depending on your jurisdiction. This
+tool is for personal use with music you already listen to; you are
+responsible for what you download and keep.
+
+## Keeping yt-dlp alive
+
+yt-dlp breaks regularly when YouTube changes its site — that is normal and
+fixed upstream within days. When downloads fail in bulk, upgrade first:
+
+```bash
+pipx upgrade yt-dlp    # or: pip install -U yt-dlp
+```
+
+## Docker
+
+The Navidrome crowd usually runs containers, so:
+
+```dockerfile
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+COPY . /src
+RUN pip install --no-cache-dir /src yt-dlp
+WORKDIR /config
+ENTRYPOINT ["starkeep"]
+CMD ["run", "--config-dir", "/config"]
+```
+
+```yaml
+services:
+  starkeep:
+    build: .
+    environment:
+      LASTFM_API_KEY: "..."
+      SUBSONIC_PASSWORD: "..."
+    volumes:
+      - ./config:/config          # config.yaml, state.json, logs
+      - /music:/music             # incoming_dir + library_dir inside here
+```
 
 ## Roadmap
 

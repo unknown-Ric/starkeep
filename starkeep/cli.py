@@ -9,6 +9,8 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+import requests
+
 from . import config as config_mod
 from . import blacklist
 from . import reconcile
@@ -123,6 +125,17 @@ def doctor(cfg) -> int:
     return 0 if ok else 1
 
 
+def _ping(url: str, ok: bool) -> None:
+    """healthchecks.io-style ping: success hits url, failure hits url/fail.
+    Best-effort: monitoring must never mask or break the real result."""
+    if not url:
+        return
+    try:
+        requests.get(url if ok else f"{url}/fail", timeout=10)
+    except Exception:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="starkeep", description=__doc__)
     ap.add_argument("--config-dir", default=".", help="directory holding config.yaml")
@@ -149,7 +162,6 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = config_mod.load(args.config_dir) or config_mod.first_run_setup(args.config_dir)
-    import datetime as dt
     import datetime as dt
     cfg = cfg.with_api_key()
     if not cfg.blacklist_file:
@@ -197,7 +209,10 @@ def main() -> None:
                                 expire=not getattr(args, "no_expire", False))
         except Exception as e:  # cron-friendly: one clear line, non-zero exit
             print(f"starkeep {args.cmd} failed: {e}", file=sys.stderr)
+            _ping(cfg.ping_url, ok=False)
             sys.exit(1)
+        if args.cmd == "run":
+            _ping(cfg.ping_url, ok=True)
         print(json.dumps(result, indent=2, default=str))
 
 if __name__ == "__main__":
