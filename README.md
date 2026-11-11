@@ -70,9 +70,12 @@ All commands accept `--config-dir /path/to/dir` (default: current directory).
 (promote/expire without downloading anything).
 
 Every `run` also renders a **static `status.html`** next to `state.json`:
-what is auditioning, expiry dates, recently promoted tracks, orphans. No
-server, no credentials, no JavaScript — open it directly or serve it with
-anything you already run (`python -m http.server`, nginx, …).
+the **running period** (since the last full run — auditioned tracks with
+expiry dates, promoted so-far) and the **previous period** (finished, with
+its final promoted/expired outcome), plus orphans. No server, no credentials,
+no JavaScript — open it directly or serve it with anything you already run
+(`python -m http.server`, nginx, …). Two-period history starts at the first
+full run after the upgrade; before that the page shows a live fallback view.
 
 A **spot run** outside the schedule is just `starkeep run` (the pipeline is
 idempotent and lock-protected, so extra runs are safe). Use `--since

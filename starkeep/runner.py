@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 from . import decide, download, harvest, playlist, reconcile
 from . import report as report_mod
@@ -111,6 +112,17 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             "orphans": report["orphans"],
             "playlist": pl,
         }
+        # per-run record for the status.html two-period view (full runs open a
+        # new period; promote passes accumulate into the running one)
+        st.add_run(stt, {
+            "at": st.utcnow(),
+            "full": expire,
+            "downloaded": [[c["artist"], c["title"]] for c in candidates],
+            "promoted": [Path(p).name for p in decision["keeps"]],
+            "expired": [Path(p).name for p in decision["deletes"]],
+            "orphans": len(report["orphans"]),
+        })
+        st.save(cfg.state_file, stt)
         try:  # a broken snapshot must not fail the run
             result["report"] = report_mod.write(cfg, stt, report["orphans"])
         except Exception as e:

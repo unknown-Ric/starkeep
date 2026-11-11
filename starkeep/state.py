@@ -41,6 +41,7 @@ def _empty() -> dict[str, Any]:
         "candidates": [],  # artist,title,status,added_at,added_run,file_path,strikes,downloaded_at,auditions
         "moved": [],
         "deleted": [],
+        "runs": [],        # per-run summary records, newest last (see add_run)
     }
 
 
@@ -110,6 +111,7 @@ def load(state_path: str) -> dict[str, Any]:
     st.setdefault("candidates", [])
     st.setdefault("moved", [])
     st.setdefault("deleted", [])
+    st.setdefault("runs", [])
     st["path"] = state_path
     return st
 
@@ -171,6 +173,14 @@ def add_candidate(st: dict, artist: str, title: str, status: str, **extra: Any) 
     }
     st["candidates"].append(c)
     return c
+
+
+def add_run(st: dict, rec: dict, keep: int = 30) -> None:
+    """Append a per-run summary record, newest last, capped so state.json
+    does not grow forever. Runs are the unit of status.html's two-period view."""
+    st.setdefault("runs", []).append(rec)
+    if len(st["runs"]) > keep:
+        st["runs"] = st["runs"][-keep:]
 
 
 def strike(st: dict, artist: str, title: str) -> None:
