@@ -19,7 +19,8 @@ log = logging.getLogger(__name__)
 
 
 def report_path(cfg: Config) -> Path:
-    return Path(cfg.state_file).expanduser().with_suffix(".html")
+    # fixed name, not derived from state.json's name (docs say status.html)
+    return Path(cfg.state_file).expanduser().parent / "status.html"
 
 
 def _esc(text: object) -> str:
