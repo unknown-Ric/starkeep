@@ -64,14 +64,12 @@ def config_cmd(cfg, config_dir: str = ".") -> int:
         secret = name in env_vars
         shown = (("*** set ***" if val else "-") if secret
                  else (str(val) if val else "-"))
-        if val == dflt and not val:
-            source = "default"
-        elif os.environ.get(env_vars.get(name, "")) and not file_vals.get(name):
-            source = f"env ({env_vars[name]})"
+        if os.environ.get(env_vars.get(name, "")) and not file_vals.get(name):
+            source = f"env ({env_vars.get(name)})"
         elif val != dflt:
             source = f"config (default: {dflt if not secret else '*'})"
         else:
-            source = "config"
+            source = "default"
         print(f"{name:<22}{shown:<40}{source}")
     return 0
 
