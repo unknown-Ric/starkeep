@@ -12,6 +12,10 @@ import yaml
 
 CONFIG_FILE = "config.yaml"
 
+# Bare read-only commands (config/status/show-state) fall back here when the
+# current directory has no config and the dir itself is configured.
+CLI_FALLBACK_CONFIG_DIR = "/etc/starkeep"
+
 # Promotional image GitHub builds per repo; survives forks/renames via config.
 # PNG lives next to starkeep-logo.svg so covers need no SVG rasterizer.
 DEFAULT_PLAYLIST_ICON = "https://raw.githubusercontent.com/unknown-Ric/starkeep/main/starkeep-logo.png"

@@ -198,6 +198,13 @@ def main() -> None:
     args = ap.parse_args()
 
     read_only = args.cmd in ("config", "status", "show-state")
+    if (read_only and args.config_dir == "."
+            and not config_mod.config_path(".").is_file()
+            and config_mod.config_path(config_mod.CLI_FALLBACK_CONFIG_DIR).is_file()):
+        # a bare `starkeep status` on the server should find /etc/starkeep
+        args.config_dir = config_mod.CLI_FALLBACK_CONFIG_DIR
+        print(f"no config.yaml here — using "
+              f"{config_mod.CLI_FALLBACK_CONFIG_DIR}/config.yaml\n")
     cfg = config_mod.load(args.config_dir)
     if cfg is None:
         if read_only:
