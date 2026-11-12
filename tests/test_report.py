@@ -33,7 +33,8 @@ def test_snapshot_is_mobile_readable(cfg):
     assert "@media" in text                     # tighter padding on phones
 
 
-def test_snapshot_escapes_html_and_holds_no_secrets(cfg):    stt = st.load(cfg.state_file)
+def test_snapshot_escapes_html_and_holds_no_secrets(cfg):
+    stt = st.load(cfg.state_file)
     st.add_candidate(stt, "<script>alert(1)</script>", "B & W", status="downloaded")
 
     path = report.write(cfg, stt, [])
