@@ -15,7 +15,7 @@ import requests
 from . import config as config_mod
 from . import blacklist
 from . import reconcile
-from . import report
+from . import report as report_mod
 from . import runner
 from . import state as st
 from .lastfm import LastfmClient
@@ -33,8 +33,8 @@ def status(cfg) -> int:
             print(f"  {name:<14}: {count}")
     print(f"moves recorded  : {len(stt.get('moved', []))}")
     print(f"deletes recorded: {len(stt.get('deleted', []))}")
-    if report.report_path(cfg).is_file():
-        print(f"status snapshot : {report.report_path(cfg)}")
+    if report_mod.report_path(cfg).is_file():
+        print(f"status snapshot : {report_mod.report_path(cfg)}")
 
     report = reconcile.scan(cfg, stt)
     if report["orphans"]:
@@ -190,9 +190,23 @@ def main() -> None:
     sub.add_parser("config", help="effective configuration: set vs default values")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
+    # --config-dir also accepted after the subcommand (SUPPRESS: don't mask
+    # the global default ".")
+    for p in sub.choices.values():
+        p.add_argument("--config-dir", default=argparse.SUPPRESS,
+                       help=argparse.SUPPRESS)
     args = ap.parse_args()
 
-    cfg = config_mod.load(args.config_dir) or config_mod.first_run_setup(args.config_dir)
+    read_only = args.cmd in ("config", "status", "show-state")
+    cfg = config_mod.load(args.config_dir)
+    if cfg is None:
+        if read_only:
+            # showing defaults/report of nothing is fine; a wizard is not
+            cfg = config_mod.Config()
+            if args.cmd == "config":
+                print(f"no config.yaml in {args.config_dir!r} — showing defaults\n")
+        else:
+            cfg = config_mod.first_run_setup(args.config_dir)
     import datetime as dt
     cfg = cfg.with_api_key()
     if not cfg.blacklist_file:
