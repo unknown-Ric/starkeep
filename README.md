@@ -300,10 +300,12 @@ No. One config, one Navidrome user, one host — a personal-homelab tool.
 
 ## Credentials
 
-The Subsonic password lives in `config.yaml` (mode `600`) or, preferably, in
-the environment: `SUBSONIC_PASSWORD` is picked up automatically. Use a
-**dedicated, non-admin Navidrome user** for starkeep — it only needs the
-normal Subsonic endpoints and its own star/playlist state.
+The rule is uniform: **secrets live in the environment, behavior in
+config.yaml.** `LASTFM_API_KEY` and `SUBSONIC_PASSWORD` are picked up from
+the environment automatically; the config file (mode `600`) only stores
+behavior keys — and a saved config contains just what differs from the
+defaults. Use a **dedicated, non-admin Navidrome user** for starkeep — it
+only needs the normal Subsonic endpoints and its own star/playlist state.
 
 ## Legal note
 

@@ -1,6 +1,11 @@
 # starkeep configuration. The first-run setup (`starkeep doctor`) creates your
 # local config.yaml; this file documents every key. Your real config.yaml is
 # gitignored and written with mode 600 — never commit credentials.
+#
+# The uniform rule: secrets go in the environment (LASTFM_API_KEY,
+# SUBSONIC_PASSWORD), behavior keys go here. A saved config.yaml contains
+# only what differs from the defaults; `starkeep config` shows the effective
+# values. This file is the reference — you do not copy it, you read it.
 
 # Last.fm
 lastfm_user: ""            # scrobble history is read from this user

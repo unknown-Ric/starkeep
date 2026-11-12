@@ -123,10 +123,18 @@ def first_run_setup(directory: str | Path = ".") -> Config:
 
 
 def save(directory: str | Path, cfg: Config) -> None:
+    """Write only what differs from the defaults (behavior keys; secrets belong
+    in the environment — see README). Load() fills the rest from defaults."""
     p = config_path(directory)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(yaml.dump(cfg.__dict__, sort_keys=False), encoding="utf-8")
-    try:  # the file holds the Subsonic password
+    defaults = Config()
+    data = {k: v for k, v in cfg.__dict__.items()
+            if v != getattr(defaults, k)}
+    header = ("# starkeep config - only values that differ from the defaults.\n"
+              "# Every option is documented in config.example.yaml.\n"
+              "# Secrets (LASTFM_API_KEY, SUBSONIC_PASSWORD) live in the env.\n")
+    p.write_text(header + yaml.dump(data, sort_keys=False), encoding="utf-8")
+    try:  # the file may hold the Subsonic password
         os.chmod(p, 0o600)
     except OSError:
         pass

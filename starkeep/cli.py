@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from dataclasses import replace
@@ -44,6 +45,34 @@ def status(cfg) -> int:
             print(f"  ... and {len(report['orphans']) - 10} more")
     else:
         print("orphans         : 0")
+    return 0
+
+
+def config_cmd(cfg, config_dir: str = ".") -> int:
+    """Effective configuration: what you set vs what runs on the default."""
+    defaults = config_mod.Config()
+    try:  # values actually in the file (env may fill the rest at runtime)
+        file_vals = config_mod.load(config_dir).__dict__
+    except Exception:
+        file_vals = {}
+    env_vars = {"lastfm_api_key": "LASTFM_API_KEY",
+                "subsonic_password": "SUBSONIC_PASSWORD"}
+    print(f"{'key':<22}{'value':<40}source")
+    for name in config_mod.Config.__dataclass_fields__:
+        val = getattr(cfg, name)
+        dflt = getattr(defaults, name)
+        secret = name in env_vars
+        shown = (("*** set ***" if val else "-") if secret
+                 else (str(val) if val else "-"))
+        if val == dflt and not val:
+            source = "default"
+        elif os.environ.get(env_vars.get(name, "")) and not file_vals.get(name):
+            source = f"env ({env_vars[name]})"
+        elif val != dflt:
+            source = f"config (default: {dflt if not secret else '*'})"
+        else:
+            source = "config"
+        print(f"{name:<22}{shown:<40}{source}")
     return 0
 
 
@@ -160,6 +189,7 @@ def main() -> None:
     forget_p.add_argument("artist", help="artist as shown in the state/playlist")
     forget_p.add_argument("title", help="title as shown in the state/playlist")
     sub.add_parser("status", help="summary of last run from state.json")
+    sub.add_parser("config", help="effective configuration: set vs default values")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
     args = ap.parse_args()
@@ -184,6 +214,8 @@ def main() -> None:
 
     if args.cmd == "status":
         sys.exit(status(cfg))
+    if args.cmd == "config":
+        sys.exit(config_cmd(cfg, args.config_dir))
     if args.cmd == "forget":
         config_mod.validate(cfg, require_lastfm=False)  # still want a sane config
         stt = st.load(cfg.state_file)
