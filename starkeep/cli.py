@@ -71,6 +71,10 @@ def config_cmd(cfg, config_dir: str = ".") -> int:
         else:
             source = "default"
         print(f"{name:<22}{shown:<40}{source}")
+    for name, var in env_vars.items():
+        if not getattr(cfg, name) and not os.environ.get(var):
+            print(f"[hint] {var} is not set in this shell — a run would fail; "
+                  "source your env file or export it")
     return 0
 
 
