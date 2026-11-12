@@ -25,8 +25,15 @@ def test_snapshot_lists_audition_tracks_and_orphans(cfg):
     assert "03. Title.m4a" in text     # recently promoted
 
 
-def test_snapshot_escapes_html_and_holds_no_secrets(cfg):
+def test_snapshot_is_mobile_readable(cfg):
     stt = st.load(cfg.state_file)
+    path = report.write(cfg, stt, [])
+    text = Path(path).read_text(encoding="utf-8")
+    assert 'name="viewport"' in text            # no desktop-zoom rendering
+    assert "@media" in text                     # tighter padding on phones
+
+
+def test_snapshot_escapes_html_and_holds_no_secrets(cfg):    stt = st.load(cfg.state_file)
     st.add_candidate(stt, "<script>alert(1)</script>", "B & W", status="downloaded")
 
     path = report.write(cfg, stt, [])

@@ -171,8 +171,14 @@ table{border-collapse:collapse;width:100%}
 td,th{padding:.2rem .6rem .2rem 0;border-bottom:1px solid #333;text-align:left;
       font-size:.9rem}
 .warn{color:#f8b}ul{margin:.2rem 0;padding-left:1.2rem}
+li.warn{word-break:break-all}  /* orphan paths must wrap, not push width */
 footer{margin-top:2rem;color:#777;font-size:.8rem}
 .k{color:#888}
+/* phones: tighter padding */
+@media (max-width:560px){
+  body{padding:.75rem;font-size:14px}
+  td,th{padding:.15rem .3rem .15rem 0}
+}
 """
 
 
@@ -202,6 +208,7 @@ def write(cfg: Config, stt: dict, orphans: list[str]) -> str:
                   "<h2>Orphans</h2><p class=\"k\">none</p>"
 
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>starkeep status</title><style>{_CSS}</style></head><body>
 <h1>starkeep</h1>
 <p>Last run: <strong>{_date(stt.get('last_run'))}</strong></p>
