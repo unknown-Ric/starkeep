@@ -51,8 +51,9 @@ starkeep doctor                 # first run asks for the rest and validates ever
 
 `starkeep doctor` checks config consistency, Last.fm, Subsonic auth, yt-dlp,
 ffmpeg and folder permissions. It also warns whether your starred songs expose
-artist/title fields. `config.yaml` stores the Subsonic password and is written
-with mode `600`.
+artist/title fields. Secrets (`LASTFM_API_KEY`, `SUBSONIC_PASSWORD`) live in
+the environment, not in `config.yaml`; the file is written with mode `600`
+anyway and contains only what differs from the defaults.
 
 ## Commands
 
@@ -62,10 +63,14 @@ with mode `600`.
 | `starkeep dry-run` | Show what would be promoted/deleted; touches nothing |
 | `starkeep forget ARTIST TITLE` | Remove a candidate from state so it can be harvested again |
 | `starkeep status` | Last run, candidate counts, orphans in `incoming/` |
+| `starkeep config` | Effective configuration: set values vs defaults, secrets masked |
 | `starkeep doctor` | Validate config, connectivity, dependencies |
 | `starkeep show-state` | Raw `state.json` (debugging) |
 
-All commands accept `--config-dir /path/to/dir` (default: current directory).
+All commands accept `--config-dir /path/to/dir` (default: current directory;
+also accepted after the subcommand). The read-only commands (`config`,
+`status`, `show-state`) fall back to `/etc/starkeep` when the current
+directory has no config — so a bare `starkeep status` works on the server.
 `run` and `dry-run` also accept `--cap N`; `run --cap 0` is a decide-only pass
 (promote/expire without downloading anything).
 
