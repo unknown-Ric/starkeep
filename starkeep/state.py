@@ -30,7 +30,7 @@ STATE_VERSION = 1
 #   queued -> downloaded -> promoted | expired
 #   queued -> failed (strike) -> queued (retry) -> failed ... or promoted/expired
 #   skipped-owned: already in the library, never downloaded
-#   missing: file vanished from incoming/ (never deleted by us)
+#   (a vanished file is expired: manual deletion rejects the track — reconcile)
 TERMINAL_STATUSES = {"promoted", "expired", "skipped-owned"}
 
 
@@ -127,6 +127,14 @@ def save(state_path: str, st: dict[str, Any]) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, p)
+        try:  # a power loss could otherwise roll back the rename on some FS
+            dir_fd = os.open(p.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -139,13 +147,24 @@ def forget_candidate(st: dict, artist: str, title: str) -> int:
 
     Removes every row matching the normalized artist+title regardless of
     status (expired, failed, promoted row removal does NOT touch the promoted
-    library file or the owned-dedupe, which is search3-based). Returns count.
+    library file or the owned-dedupe, which is search3-based). The YouTube
+    video ids of removed downloads are banned, so a forgotten wrong-version
+    track re-harvests into the *next* best result instead of the same one.
+    Returns count.
     """
     key = candidate_key(artist, title)
-    before = len(st["candidates"])
+    removed = [c for c in st["candidates"]
+               if candidate_key(c["artist"], c["title"]) == key]
+    ids = [c["video_id"] for c in removed if c.get("video_id")]
+    if ids:
+        banned = st.setdefault("banned_ids", [])
+        for vid in ids:
+            if vid not in banned:
+                banned.append(vid)
+        del banned[:-100]
     st["candidates"] = [c for c in st["candidates"]
                         if candidate_key(c["artist"], c["title"]) != key]
-    return before - len(st["candidates"])
+    return len(removed)
 
 
 def candidate_key(artist: str, title: str) -> tuple[str, str]:
@@ -194,9 +213,10 @@ def queue_decision(st: dict, artist: str, title: str, max_strikes: int = 2) -> s
     """What should harvest do with this candidate?
 
     new     : never seen -> check library, then queue
-    retry   : a previous failure/missing file below the strike limit -> queue again
+    retry   : a previous failure below the strike limit -> queue again
     requeue : was queued when a run crashed -> keep it queued
-    skip    : downloaded/promoted/expired/owned, or out of strikes
+    skip    : downloaded/promoted/expired/owned, failed beyond strikes, or
+              missing (a vanished file was rejected — see reconcile)
     """
     c = find_candidate(st, artist, title)
     if c is None:
@@ -205,7 +225,7 @@ def queue_decision(st: dict, artist: str, title: str, max_strikes: int = 2) -> s
     strikes = int(c.get("strikes", 0))
     if status == "queued":
         return "requeue"
-    if status in ("failed", "missing") and strikes < max_strikes:
+    if status == "failed" and strikes < max_strikes:
         return "retry"
     return "skip"
 

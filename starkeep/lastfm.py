@@ -29,23 +29,34 @@ class LastfmClient:
     # ---- scrobble history --------------------------------------------------
 
     def recent_track_seeds(self, days: int = 7, limit: int = 100) -> list[tuple[str, str]]:
-        """Most-heard *distinct* (artist, title) pairs over the last N days."""
+        """Most-heard *distinct* (artist, title) pairs over the last N days.
+
+        Paginates the whole window so `harvest_days` really reaches back N days
+        (Last.fm names the parameter `from`; page size maxes out at 200).
+        """
         from_ts = int((dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).timestamp())
-        data = self._call(
-            "user.getRecentTracks", user=self.user, limit=limit,
-            from_=str(from_ts), extended="0",
-        )
-        tracks = data.get("recenttracks", {}).get("track", [])
         counts: dict[tuple[str, str], int] = {}
-        for t in tracks:
-            if "@attr" in t and t["@attr"].get("nowplaying") == "true":
-                continue
-            artist = (t.get("artist") or {}).get("#text") if isinstance(t.get("artist"), dict) else t.get("artist")
-            title, count = t.get("name"), 0
-            if not artist or not title:
-                continue
-            counts[(artist, title)] = counts.get((artist, title), 0) + 1
-        return [k for k, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+        page = 1
+        while True:
+            data = self._call(
+                "user.getRecentTracks", user=self.user, limit="200",
+                page=str(page), extended="0", **{"from": str(from_ts)},
+            )
+            recent = data.get("recenttracks", {})
+            for t in recent.get("track", []):
+                if t.get("@attr", {}).get("nowplaying") == "true":
+                    continue
+                artist = (t.get("artist") or {}).get("#text") if isinstance(t.get("artist"), dict) else t.get("artist")
+                title = t.get("name")
+                if not artist or not title:
+                    continue
+                counts[(artist, title)] = counts.get((artist, title), 0) + 1
+            total_pages = int(recent.get("@attr", {}).get("totalPages") or 1)
+            if page >= total_pages or len(counts) >= limit:
+                break
+            page += 1
+        ranked = [k for k, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+        return ranked[:limit]
 
     def similar_tracks(self, artist: str, title: str, limit: int = 3) -> list[tuple[str, str]]:
         try:

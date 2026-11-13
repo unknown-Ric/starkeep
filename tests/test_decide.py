@@ -102,24 +102,6 @@ def test_star_matches_by_file_name_when_tags_differ(cfg, now):
     assert c["status"] == "promoted"
 
 
-def test_promotion_never_overwrites_library_file(cfg, now):
-    stt = st.load(cfg.state_file)
-    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
-    existing = Path(cfg.library_dir) / "Artist" / "Singles" / "Artist - Title.m4a"
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    existing.write_bytes(b"library copy")
-
-    result = decide.decide(
-        cfg, FakeSubsonic([{"artist": "Artist", "title": "Title", "path": ""}]),
-        FakeLastfm(), stt, now=now,
-    )
-
-    assert result["keeps"] == []
-    assert existing.read_bytes() == b"library copy"
-    assert src.exists()
-    assert c["status"] == "downloaded"
-
-
 def test_dry_run_changes_nothing(cfg, now):
     stt = st.load(cfg.state_file)
     c, src = _downloaded(cfg, stt, "Artist", "Title", 30, now)
@@ -289,3 +271,61 @@ def test_starred_track_is_immune_to_the_run_budget(cfg, now):
 
     assert len(result["keeps"]) == 1
     assert c["status"] == "promoted"
+
+
+# ---- promotion failure handling (bug: stuck starred tracks) ------------------
+
+def test_promotion_paths_are_sanitized(cfg, now):
+    """AC/DC or Either/Or must not nest folders or break the move."""
+    stt = st.load(cfg.state_file)
+    # the downloaded filename is what safe_name produced (download.py does
+    # the same before writing); the promotion path must sanitize too
+    c, src = _downloaded(cfg, stt, "AC/DC", "Either/Or", 1, now,
+                         filename="AC_DC - Either_Or.m4a")
+
+    result = decide.decide(
+        cfg, FakeSubsonic([{"artist": "AC/DC", "title": "Either/Or", "path": ""}]),
+        FakeLastfm(), stt, now=now,
+    )
+
+    expected = str(Path(cfg.library_dir) / "AC_DC" / "Singles" / "AC_DC - Either_Or.m4a")
+    assert result["keeps"] == [expected]
+    assert Path(expected).is_file()
+    assert c["status"] == "promoted"
+
+
+def test_duplicate_promotion_target_expires_audition_copy(cfg, now):
+    """Starred + target already in library: no error loop, copy is expired."""
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    existing = Path(cfg.library_dir) / "Artist" / "Singles" / "Artist - Title.m4a"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_bytes(b"library copy")
+
+    result = decide.decide(
+        cfg, FakeSubsonic([{"artist": "Artist", "title": "Title", "path": ""}]),
+        FakeLastfm(), stt, now=now,
+    )
+
+    assert result["keeps"] == []
+    assert existing.read_bytes() == b"library copy"  # library never clobbered
+    assert not src.exists()                          # audition copy removed
+    assert c["status"] == "expired"
+    assert c["expired_at"]
+
+
+def test_promotion_failure_expires_after_repeated_attempts(cfg, now, monkeypatch):
+    stt = st.load(cfg.state_file)
+    c, src = _downloaded(cfg, stt, "Artist", "Title", 1, now)
+    stars = [{"artist": "Artist", "title": "Title", "path": ""}]
+    monkeypatch.setattr(decide, "promote_file",
+                        lambda *a, **k: (_ for _ in ()).throw(PermissionError("denied")))
+
+    for attempt in (1, 2):
+        decide.decide(cfg, FakeSubsonic(stars), FakeLastfm(), stt, now=now)
+        assert c["status"] == "downloaded"  # retried while below the limit
+        assert c["promote_attempts"] == attempt
+
+    decide.decide(cfg, FakeSubsonic(stars), FakeLastfm(), stt, now=now)
+    assert c["status"] == "expired"      # no error log every 4 hours forever
+    assert not Path(src).exists()

@@ -12,11 +12,14 @@ import mutagen
 from . import state as st
 from . import blacklist
 from .config import Config
+from .download import safe_name
 from .lastfm import LastfmClient
 from .subsonic import SubsonicClient, _norm, _strip_feat
 
 
 log = logging.getLogger(__name__)
+
+_MAX_PROMOTE_ATTEMPTS = 3  # then the audition copy is expired like any failure
 
 
 def _pc_key(artist: str, title: str) -> str:
@@ -108,6 +111,9 @@ def plan(cfg: Config, starred: list[dict], stt: dict, playcounts: dict[str, int]
             continue
         src = Path(c["file_path"])
         if starred_match(c, starred):
+            # remember for the status page: still status=downloaded means it
+            # will be promoted at the next run
+            c.setdefault("starred_at", st.utcnow())
             if src.is_file() and _under(src, incoming_root):
                 keeps.append((c, src))
             else:
@@ -145,7 +151,7 @@ def promote_file(cfg: Config, src: Path, artist: str, title: str,
     bogus yt-dlp channel-name artist tags. Falls back to <Artist>/Singles/.
     Never overwrites an existing file.
     """
-    info = lfm.track_album_info(artist, title) or {}
+    info = (lfm.track_album_info(artist, title) if lfm else None) or {}
     album = info.get("album")
     track_no = info.get("track_number")
 
@@ -155,23 +161,45 @@ def promote_file(cfg: Config, src: Path, artist: str, title: str,
             m["artist"] = artist
         if not m.get("title"):
             m["title"] = title
-        if album:
-            m["album"] = album
-        if track_no:
-            m["tracknumber"] = str(track_no)
-        m.save()
 
-    target_dir = Path(cfg.library_dir) / artist / (album or "Singles")
+    # SAFETY: path parts go through safe_name — "AC/DC" or "Either/Or" would
+    # otherwise create nested folders or break the move outright.
+    artist_s, title_s = safe_name(artist), safe_name(title)
+    target_dir = Path(cfg.library_dir) / artist_s / safe_name(album or "Singles")
     target_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"{track_no:02d}. {title}" if track_no else f"{artist} - {title}"
+    stem = f"{track_no:02d}. {title_s}" if track_no else f"{artist_s} - {title_s}"
     dst = target_dir / f"{stem}{src.suffix}"
     if dst.exists():
         # Same track already promoted (state was reset, or a duplicate star).
         # Do not clobber the library copy: leave the incoming file for expiry.
         raise FileExistsError(f"promotion target already exists: {dst}")
+    if m is not None:  # tag only after the target check: a failed promotion
+        # must not leave a modified audition copy behind
+        if album and not m.get("album"):
+            m["album"] = album
+        if track_no and not m.get("tracknumber"):
+            m["tracknumber"] = str(track_no)
+        m.save()
     move(src, dst)
-    stt.setdefault("moved", []).append({"from": str(src), "to": str(dst), "at": st.utcnow()})
+    stt.setdefault("moved", []).append({"from": str(src), "to": str(dst),
+                                        "at": st.utcnow(),
+                                        "artist": artist, "title": title})
     return str(dst)
+
+
+def _expire_copy(stt: dict, c: dict, src: Path, incoming_root: Path,
+                 reason: str, deleted: list[str]) -> None:
+    """Expire a still-starred candidate's audition copy (duplicate target or
+    promotion that keeps failing). SAFETY: identical restrictions to the
+    expiry deletes — only a file inside incoming_dir is removed, and the
+    removal is recorded in state."""
+    if src.is_file() and _under(src, incoming_root):
+        src.unlink(missing_ok=True)
+        stt["deleted"].append({"path": str(src), "at": st.utcnow()})
+        deleted.append(str(src))
+        log.info("expired (%s): %s - %s", reason, c["artist"], c["title"])
+    c["status"] = "expired"
+    c["expired_at"] = st.utcnow()
 
 
 def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict,
@@ -198,21 +226,37 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
         }
 
     promoted: list[str] = []
+    incoming_root = Path(cfg.incoming_dir).resolve()
+    # Re-read stars: a track starred after plan() ran must not be deleted —
+    # with the planning-time list this check could never catch anything.
+    starred = sub.starred_songs()
+    deleted: list[str] = []
     for c, src in keeps:
         try:
             dst = promote_file(cfg, src, c["artist"], c["title"], lfm, stt)
+        except FileExistsError as e:
+            # The library already has this track: the audition copy is
+            # redundant and must not log an error on every run.
+            log.warning("already in library, expiring duplicate audition copy: %s", e)
+            _expire_copy(stt, c, src, incoming_root, "duplicate-target", deleted)
+            continue
         except Exception as e:
-            # Leave it downloaded: a later run can retry (or it expires).
-            log.error("promotion failed for %s - %s: %s", c["artist"], c["title"], e)
-            c.pop("_expire_reason", None)
+            attempts = int(c.get("promote_attempts", 0)) + 1
+            c["promote_attempts"] = attempts
+            log.error("promotion failed for %s - %s (attempt %d): %s",
+                      c["artist"], c["title"], attempts, e)
+            if attempts >= _MAX_PROMOTE_ATTEMPTS:
+                # stop logging the same failure forever (every 4h with the
+                # recommended schedule); the audition copy is then expired
+                log.error("promotion keeps failing, expiring audition copy: %s - %s",
+                          c["artist"], c["title"])
+                _expire_copy(stt, c, src, incoming_root, "promote-failed", deleted)
             continue
         c["status"] = "promoted"
         log.info("promoted %s - %s -> %s", c["artist"], c["title"], dst)
         promoted.append(dst)
         st.save(cfg.state_file, stt)
 
-    incoming_root = Path(cfg.incoming_dir).resolve()
-    deleted: list[str] = []
     for c, src in deletes:
         # SAFETY: only delete a path recorded in state, that still exists, and
         # that resolves inside incoming_dir. Never glob, never follow a move.
@@ -220,6 +264,7 @@ def decide(cfg: Config, sub: SubsonicClient, lfm: LastfmClient | None, stt: dict
             log.warning("not deleting %s: missing or outside incoming_dir", src)
             continue
         if starred_match(c, starred):  # starred between planning and acting
+            c.setdefault("starred_at", st.utcnow())
             c.pop("_expire_reason", None)
             continue
         src.unlink(missing_ok=True)

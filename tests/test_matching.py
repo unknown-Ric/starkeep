@@ -44,6 +44,7 @@ def test_strip_feat():
     assert _strip_feat("Song (feat. B)") == "song"
     assert _strip_feat("Artist feat. B") == "artist"
     assert _strip_feat("Song ft. B") == "song"
+    assert _strip_feat("Song featuring Q-Tip") == "song"  # long form too
     assert _strip_feat("Song (Live)") == "song (live)"  # only feat/ft is stripped
 
 

@@ -72,7 +72,7 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             result["orphans"] = report["orphans"]
             return result
 
-        if lfm is None:
+        if cfg.cap > 0 and lfm is None:
             raise RuntimeError("Last.fm API key missing — set LASTFM_API_KEY")
 
         if report["missing"]:
@@ -83,7 +83,13 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
         # week's harvesting fails (Last.fm outage, empty history, ...).
         decision = decide.decide(cfg, sub, lfm, stt, expire=expire)
 
-        candidates = harvest.harvest(cfg, lfm, sub, stt)
+        # A Last.fm outage must not skip promotion bookkeeping: the run still
+        # re-stars, syncs the playlist and records itself.
+        try:
+            candidates = harvest.harvest(cfg, lfm, sub, stt)
+        except Exception as e:
+            log.error("harvest failed, continuing without downloads: %s", e)
+            candidates = []
         downloaded = download.download_all(cfg, candidates, stt, lfm)
         st.save(cfg.state_file, stt)
 
@@ -113,12 +119,22 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             "playlist": pl,
         }
         # per-run record for the status.html two-period view (full runs open a
-        # new period; promote passes accumulate into the running one)
+        # new period; promote passes accumulate into the running one).
+        # Promoted rows carry artist/title/date so the status page can render
+        # them as a table; promoted files come from state's moved records.
+        by_to = {m.get("to"): m for m in reversed(stt.get("moved", []))}
+        promoted_rec = []
+        for dst in decision["keeps"]:
+            m = by_to.get(dst)
+            if m and m.get("artist"):
+                promoted_rec.append([m["artist"], m["title"], m.get("at")])
+            else:  # legacy moved record without artist/title
+                promoted_rec.append([Path(dst).name])
         st.add_run(stt, {
             "at": st.utcnow(),
             "full": expire,
             "downloaded": [[c["artist"], c["title"]] for c in candidates],
-            "promoted": [Path(p).name for p in decision["keeps"]],
+            "promoted": promoted_rec,
             "expired": [Path(p).name for p in decision["deletes"]],
             "orphans": len(report["orphans"]),
         })

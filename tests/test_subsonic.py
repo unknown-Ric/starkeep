@@ -23,10 +23,19 @@ def test_playlists_allayes_name_between_fields():
         "playlistName": "Starkeep Audition"}]
 
 
-def test_replace_playlist_deletes_name_shaped_entry():
+def test_replace_playlist_updates_in_place_keeps_id():
     c = FakeClient()
-    c.replace_playlist("Starkeep Audition", ["s1"])
-    assert ("deletePlaylist", {"id": "p1"}) in c.calls
+    assert c.replace_playlist("Starkeep Audition", ["s1"]) == "p1"
+    # in-place update: the playlist id stays stable for players that pinned it
+    assert ("createPlaylist", {"playlistId": "p1", "songId": ["s1"]}) in c.calls
+    assert all(ep != "deletePlaylist" for ep, _ in c.calls)
+
+
+def test_replace_playlist_creates_when_missing():
+    c = FakeClient()
+    got = c.replace_playlist("Other", ["s1"])
+    assert ("createPlaylist", {"name": "Other", "songId": ["s1"]}) in c.calls
+    assert got == "new-id"
 
 
 def test_start_scan_unsupported_server_is_a_noop():

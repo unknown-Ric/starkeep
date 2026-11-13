@@ -47,10 +47,17 @@ def scan(cfg: Config, stt: dict) -> dict:
 
 
 def apply_missing(stt: dict, missing: list[str]) -> None:
-    """Mark candidates whose file vanished so they can be retried if eligible."""
+    """Reject candidates whose file vanished (deleted by hand or lost).
+
+    The README's advice for rejecting a track is 'delete the file': that must
+    stick, so the candidate expires instead of being re-queued on the next
+    harvest. `expired_at` starts the requeue_after_days cooldown like any
+    other expiry.
+    """
     wanted = {str(Path(p)) for p in missing}
     for c in stt.get("candidates", []):
         if c.get("status") == "downloaded" and str(c.get("file_path")) in wanted:
-            c["status"] = "missing"
-            log.warning("incoming file vanished: %s (%s - %s)",
+            c["status"] = "expired"
+            c["expired_at"] = st.utcnow()
+            log.warning("incoming file vanished, rejecting: %s (%s - %s)",
                         c["file_path"], c["artist"], c["title"])

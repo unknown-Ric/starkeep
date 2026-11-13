@@ -1,8 +1,8 @@
 """Audition playlist — rebuilt at the end of every run from downloaded candidates.
 
-Replaces (delete + create) one fixed playlist so any player can pin it by name;
-starred/promoted/expired tracks drop out naturally because the source is the
-set of candidates that are still `downloaded`.
+Replaces one fixed playlist's songs in place (the playlist id stays stable, so
+players can pin it); starred/promoted/expired tracks drop out naturally because
+the source is the set of candidates that are still `downloaded`.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ def sync_audition(sub: SubsonicClient, stt: dict, icon_url: str = "",
                   name: str = AUDITION_NAME) -> dict:
     """Server playlist = exactly the tracks still awaiting a star decision.
 
-    The playlist is deleted + recreated each run (server id changes), so a
-    custom Navidrome cover is re-uploaded to the new id right after.
+    The playlist is updated in place each run (same server id), so the
+    Navidrome cover is re-uploaded to the unchanged id (harmless no-op).
     """
     cands = [c for c in stt["candidates"] if c.get("status") == "downloaded"]
     song_ids: list[str] = []

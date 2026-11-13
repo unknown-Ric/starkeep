@@ -49,6 +49,8 @@ requeue_after_days: 0      # days before an expired candidate may be harvested
 blacklist_file: ""         # manual blocklist, see blacklist.py; empty = use
                            # blacklist.txt next to this file when it exists
 downloader: "ytdlp"        # only 'ytdlp' in v1
+max_per_artist: 2          # at most this many tracks per artist in one batch
+                           # (keeps the audition varied across artists)
 audio_format: "m4a"        # m4a, mp3, opus, flac, ... — or "native" to keep the
                            # stream exactly as YouTube serves it (no re-encode;
                            # see README for the audio-quality trade-offs)

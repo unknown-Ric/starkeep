@@ -22,7 +22,7 @@ def _norm(text: str | None) -> str:
     return " ".join(unicodedata.normalize("NFKC", text or "").casefold().split())
 
 
-_FEAT = re.compile(r"(?i)[(\[,]? *\b(?:feat|ft)\.?(?: |\b)")
+_FEAT = re.compile(r"(?i)[(\[,]? *\b(?:featuring|feat|ft)\.?(?: |\b)")
 
 def _strip_feat(text: str | None) -> str:
     """'Song (feat. B)' -> 'Song' — Last.fm and YouTube credit guests differently."""
@@ -192,15 +192,21 @@ class SubsonicClient:
         return counts
 
     def replace_playlist(self, name: str, song_ids: list[str]) -> str | None:
-        """Full content replacement via delete + createPlaylist (idempotent).
+        """Full content replacement via createPlaylist (idempotent).
 
-        Returns the server id of the (re)created playlist, or None if the
-        server does not report it — callers that need the id must handle None.
+        An existing playlist is updated in place (`createPlaylist
+        playlistId=...` replaces its songs per the Subsonic API), so the
+        playlist id — and anything pinned to it — survives across runs.
+        Only a missing playlist is created fresh (and there a create failure
+        cannot lose an existing playlist). Returns the server id, or None if
+        the server does not report it — callers that need the id handle None.
         """
-        for pl in self.playlists():
-            if pl.get("playlistName") == name:
-                self._call("deletePlaylist", id=pl["id"])
-                break
+        existing = next((p for p in self.playlists()
+                         if p.get("playlistName") == name), None)
+        if existing:
+            self._call("createPlaylist", playlistId=existing["id"],
+                       **{"songId": list(song_ids)})
+            return existing["id"]
         data = self._call("createPlaylist", name=name,
                           **{"songId": list(song_ids)})
         # Navidrome nests the created playlist under "playlist" (not "createPlaylist").

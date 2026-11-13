@@ -58,12 +58,13 @@ def test_queue_decision_lifecycle(tmp_path):
     assert st.queue_decision(data, "A", "T", max_strikes=5) == "skip"
 
 
-def test_missing_file_below_strike_limit_is_retryable(tmp_path):
+def test_missing_file_is_never_retried(tmp_path):
+    """Manual deletion rejects the track (README advice must stick)."""
     data = st.load(str(tmp_path / "state.json"))
     c = st.add_candidate(data, "A", "T", status="downloaded")
     c["file_path"] = str(tmp_path / "gone.m4a")
-    c["status"] = "missing"
-    assert st.queue_decision(data, "A", "T") == "retry"
+    c["status"] = "missing"  # legacy status from older versions
+    assert st.queue_decision(data, "A", "T") == "skip"
 
 
 def test_forget_removes_all_matching_candidates(tmp_path):
@@ -79,3 +80,16 @@ def test_forget_removes_all_matching_candidates(tmp_path):
 def test_forget_nothing_removes_nothing(tmp_path):
     data = st.load(str(tmp_path / "state.json"))
     assert st.forget_candidate(data, "Nobody", "Nowhere") == 0
+
+
+def test_forget_bans_removed_video_ids(tmp_path):
+    data = st.load(str(tmp_path / "state.json"))
+    a = st.add_candidate(data, "A", "T", status="expired")
+    a["video_id"] = "vid1vid1vid"
+    b = st.add_candidate(data, " a ", " t", status="downloaded")  # same, normalized
+    b["video_id"] = "vid1vid1vid"  # dupe must not be banned twice
+    st.add_candidate(data, "A", "OTHER", status="queued")  # untouched
+
+    assert st.forget_candidate(data, "A", "T") == 2
+    assert data["banned_ids"] == ["vid1vid1vid"]
+    assert st.find_candidate(data, "A", "OTHER")["status"] == "queued"

@@ -35,7 +35,8 @@ def test_known_files_are_not_orphans(cfg):
     assert reconcile.scan(cfg, stt)["orphans"] == []
 
 
-def test_vanished_download_is_marked_missing(cfg):
+def test_vanished_download_is_rejected_not_retried(cfg):
+    """README advice 'delete the file to reject' must stick: no silent re-harvest."""
     stt = st.load(cfg.state_file)
     c = st.add_candidate(stt, "Artist", "Title", status="downloaded")
     c["file_path"] = str(Path(cfg.incoming_dir) / "gone.m4a")
@@ -44,4 +45,5 @@ def test_vanished_download_is_marked_missing(cfg):
     assert report["missing"] == [c["file_path"]]
 
     reconcile.apply_missing(stt, report["missing"])
-    assert c["status"] == "missing"
+    assert c["status"] == "expired"
+    assert c["expired_at"]  # requeue cooldown starts here

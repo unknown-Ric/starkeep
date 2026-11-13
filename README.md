@@ -4,9 +4,9 @@
   <img src="starkeep-logo.svg" alt="starkeep logo" width="160">
 </div>
 
-> Cron-powered music discovery for [Navidrome](https://navidrome.org) (or any
-> Subsonic-compatible server): Last.fm-backed candidates are downloaded into an
-> audition folder, **star a track to keep it in your library**, everything else
+> **A self-hosted Discover Weekly for Navidrome** (or any Subsonic-compatible
+> server): Last.fm-backed candidates land in an audition folder on a cron
+> schedule, **star a track to keep it in your library**, everything else
 > quietly expires.
 
 No daemon, no web UI, no database. It composes tools you already run: Navidrome,
@@ -61,7 +61,7 @@ anyway and contains only what differs from the defaults.
 |---|---|
 | `starkeep run` | Full pass: reconcile, promote/expire, harvest, download, rebuild audition playlist |
 | `starkeep dry-run` | Show what would be promoted/deleted; touches nothing |
-| `starkeep forget ARTIST TITLE` | Remove a candidate from state so it can be harvested again |
+| `starkeep forget ARTIST TITLE` | Remove a candidate from state so it can be harvested again (its rejected YouTube video is skipped on the retry) |
 | `starkeep status` | Last run, candidate counts, orphans in `incoming/` |
 | `starkeep config` | Effective configuration: set values vs defaults, secrets masked |
 | `starkeep doctor` | Validate config, connectivity, dependencies |
@@ -96,8 +96,10 @@ starkeep run --since 2026-10-01
 1. **Harvest** — last week's most-played distinct tracks seed Last.fm
    `track.getSimilar`; results are deduped against your actual library
    (`search3`) and previously seen candidates, then capped.
-2. **Download** — `yt-dlp` fetches one match per candidate
-   (`ytsearch1:Artist - Title audio`) into `incoming/`. Obvious wrong-version
+2. **Download** — `yt-dlp` fetches the first match that passes the filters
+   (`ytsearch5:Artist - Title audio` + `--max-downloads 1`, so a filtered-out
+   top hit falls through to the next result) into `incoming/`. Obvious
+   wrong-version
    uploads are filtered out before they cost a download: video titles
    containing live/cover/remix/karaoke/instrumental/acoustic are rejected
    (unless the candidate title itself contains the word), and the length must
@@ -149,9 +151,11 @@ resets — that is a server limitation.
   existing, and resolving *inside* `incoming_dir` are ever deleted. There is no
   glob-delete anywhere in the code.
 - Your library is only ever **added to**. An existing target file is never
-  overwritten; the audition copy is left to expire instead.
+  overwritten; the audition copy is expired instead (duplicates immediately,
+  other promotion failures after three attempts).
 - The one non-file write is the **`Starkeep Audition` playlist**, rebuilt each
-  run to mirror `incoming/` (delete + create). No other playlist is touched.
+  run to mirror `incoming/` (updated in place, so its playlist id stays
+  stable). No other playlist is touched.
 - `state.json` is written atomically after every candidate transition. A crash
   loses at most the in-flight step, never the state file, and never causes a
   double-delete.
@@ -257,8 +261,7 @@ Forever by default (`requeue_after_days: 0`). Set e.g.
 `requeue_after_days: 21` and candidates may come back three cleaning cycles
 after deletion — still never earlier than the *next* cleaning run, and a
 promoted copy in the library always wins (owned-dedupe). To resurrect a
-specific candidate immediately: `starkeep forget ARTIST TITLE`, or delete the
-entry from `state.json`.
+specific candidate immediately: `starkeep forget ARTIST TITLE`.
 
 **Can I block a song or artist for good?**
 `blacklist.txt` next to the config: `Artist - Title` for one track, or a bare
@@ -274,8 +277,7 @@ Too late — the audition file is gone and that candidate stays rejected
 cycles later (never earlier than the next cleaning run, and a promoted library
 copy always wins), or switch to the run-based budget (`expiry_runs`) which
 only expires a track once it was actually heard. To resurrect a specific
-candidate immediately: `starkeep forget ARTIST TITLE`, or remove its entry
-from `state.json`.
+candidate immediately: `starkeep forget ARTIST TITLE`.
 
 **The download is the wrong version (live/cover/remix).**
 Cheap guards are built in: YouTube videos whose title contains
@@ -284,7 +286,9 @@ live/cover/remix/karaoke/instrumental/acoustic are skipped during the search
 must fit the official track's Last.fm duration (±35%). Auto-generated
 "Artist - Topic" channels usually win such searches on their own, but the
 filter is title-based, not channel-based. What slips through: let it expire,
-or delete it and remove the candidate from `state.json`. The audition week is
+or run `starkeep forget ARTIST TITLE` — the re-harvest then skips the YouTube
+video you rejected and takes the next-best result (banned videos are
+remembered in `state.json`, capped at the last 100). The audition week is
 the human filter for the rest.
 
 **Can I run it more than once a week?**
@@ -328,6 +332,12 @@ fixed upstream within days. When downloads fail in bulk, upgrade first:
 pipx upgrade yt-dlp    # or: pip install -U yt-dlp
 ```
 
+Under Docker, yt-dlp is baked into the image — upgrade by rebuilding it:
+
+```bash
+docker compose build --pull
+```
+
 ## Docker
 
 The repo ships a `Dockerfile` (ffmpeg + yt-dlp included) and a
@@ -338,6 +348,13 @@ logs) and your music root:
 cp .env.example .env      # then fill in the secrets; .env is gitignored
 cd /music && docker compose run --rm starkeep doctor   # first-run setup
 ```
+
+When the first-run setup asks for paths, enter the mount points, not
+`~`-paths (inside the container `~` is `/root`, which is wiped with the
+container): audition folder `/music/_incoming`, library root
+`/music/library`, state file `/config/state.json`, logs `/config/logs` —
+those are also the setup's defaults inside the container. Never store
+credentials in `config.yaml`; secrets live in `.env` / the environment.
 
 All subcommands work the same way, e.g.
 `docker compose run --rm starkeep status` or

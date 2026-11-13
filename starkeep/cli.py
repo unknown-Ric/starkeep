@@ -217,6 +217,12 @@ def main() -> None:
             if args.cmd == "config":
                 print(f"no config.yaml in {args.config_dir!r} — showing defaults\n")
         else:
+            if not sys.stdin.isatty():
+                # cron context: interactive setup would die on EOFError
+                print("starkeep: no config.yaml and no terminal attached — "
+                      "create config.yaml (see README) or run the setup "
+                      "interactively", file=sys.stderr)
+                sys.exit(1)
             cfg = config_mod.first_run_setup(args.config_dir)
     import datetime as dt
     cfg = cfg.with_api_key()
@@ -241,10 +247,12 @@ def main() -> None:
         sys.exit(config_cmd(cfg, args.config_dir))
     if args.cmd == "forget":
         config_mod.validate(cfg, require_lastfm=False)  # still want a sane config
-        stt = st.load(cfg.state_file)
-        removed = st.forget_candidate(stt, args.artist, args.title)
-        if removed:
-            st.save(cfg.state_file, stt)
+        # hold the run lock: a concurrent `run` would lose one of the writes
+        with st.StateLock(cfg.state_file):
+            stt = st.load(cfg.state_file)
+            removed = st.forget_candidate(stt, args.artist, args.title)
+            if removed:
+                st.save(cfg.state_file, stt)
             print(f"forgot {removed} candidate(s): {args.artist} - {args.title}")
             sys.exit(0)
         print(f"no candidate in state matches: {args.artist} - {args.title}", file=sys.stderr)
@@ -256,7 +264,9 @@ def main() -> None:
         sys.exit(doctor(cfg))
     if args.cmd in ("run", "dry-run"):
         config_mod.ensure_dirs(cfg)
-        problems = config_mod.validate(cfg, require_lastfm=(args.cmd == "run"))
+        # the API key only matters when this run will actually download
+        problems = config_mod.validate(
+            cfg, require_lastfm=(args.cmd == "run" and cfg.cap > 0))
         if problems:
             print("config problems (run `starkeep doctor` for details):")
             for problem in problems:

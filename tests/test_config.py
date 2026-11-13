@@ -68,7 +68,40 @@ def test_save_writes_only_non_default_keys(tmp_path, cfg):
 def test_save_load_roundtrip(tmp_path, cfg):
     config_mod.save(tmp_path, cfg)
     loaded = config_mod.load(tmp_path)
-    assert loaded == cfg
+    # secrets are never persisted; they come from the environment
+    assert loaded.lastfm_api_key == ""
+    assert loaded.subsonic_password == ""
+    for name in config_mod.Config.__dataclass_fields__:
+        if name in ("lastfm_api_key", "subsonic_password"):
+            continue
+        assert getattr(loaded, name) == getattr(cfg, name), name
+
+
+def test_save_never_writes_secrets(tmp_path, cfg):
+    import yaml
+    config_mod.save(tmp_path, cfg)
+    data = yaml.safe_load((tmp_path / "config.yaml").read_text()) or {}
+    assert "lastfm_api_key" not in data
+    assert "subsonic_password" not in data
+
+
+def test_load_coerces_string_numbers_and_expands_paths(tmp_path, monkeypatch):
+    import yaml
+    (tmp_path / "config.yaml").write_text(yaml.dump({
+        "cap": "30", "incoming_dir": "~/sk_in",
+    }), encoding="utf-8")
+    loaded = config_mod.load(tmp_path)
+    assert loaded.cap == 30
+    assert not loaded.incoming_dir.startswith("~")
+    assert loaded.incoming_dir == str(Path.home() / "sk_in")
+
+
+def test_relative_paths_are_pinned_to_the_config_dir(tmp_path, monkeypatch):
+    import yaml
+    (tmp_path / "config.yaml").write_text(yaml.dump({"incoming_dir": "sk_in"}),
+                                          encoding="utf-8")
+    monkeypatch.chdir("/")  # wherever the run starts from
+    assert config_mod.load(tmp_path).incoming_dir == str(tmp_path / "sk_in")
 
 
 def test_default_config_saves_empty_file(tmp_path):
@@ -91,3 +124,21 @@ def test_config_cmd_masks_secrets_and_marks_sources(cfg, capsys, monkeypatch):
     assert "*** set ***" in text          # secrets present but masked
     assert "config (default: 30)" in text  # cap differs (cfg has cap=5)
     assert out == 0
+
+
+def test_env_secrets_win_over_config_file(tmp_path, cfg, monkeypatch):
+    config_mod.save(tmp_path, cfg)
+    monkeypatch.setenv("LASTFM_API_KEY", "env-key")
+    monkeypatch.setenv("SUBSONIC_PASSWORD", "env-pw")
+    loaded = config_mod.load(tmp_path).with_api_key()
+    assert loaded.lastfm_api_key == "env-key"
+    assert loaded.subsonic_password == "env-pw"
+
+
+def test_env_fills_missing_secrets(cfg, monkeypatch):
+    monkeypatch.setenv("LASTFM_API_KEY", "env-key")
+    monkeypatch.delenv("SUBSONIC_PASSWORD", raising=False)
+    bare = config_mod.Config(lastfm_user="u")
+    filled = bare.with_api_key()
+    assert filled.lastfm_api_key == "env-key"
+    assert filled.subsonic_password == ""

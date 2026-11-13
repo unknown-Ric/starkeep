@@ -12,6 +12,15 @@ import yaml
 
 CONFIG_FILE = "config.yaml"
 
+# Path fields that must be expanded (~) and resolved once at load time, so
+# every later user (download, decide, StateLock, state.save) sees the same
+# absolute path regardless of the cwd the cron run happens to start in.
+_PATH_FIELDS = ("incoming_dir", "library_dir", "state_file", "log_dir",
+                "blacklist_file")
+_INT_FIELDS = ("cap", "expiry_days", "similar_per_seed", "max_strikes",
+               "expiry_runs", "min_plays", "carry_over_runs",
+               "max_per_artist", "harvest_days", "requeue_after_days")
+
 # Bare read-only commands (config/status/show-state) fall back here when the
 # current directory has no config and the dir itself is configured.
 CLI_FALLBACK_CONFIG_DIR = "/etc/starkeep"
@@ -19,6 +28,9 @@ CLI_FALLBACK_CONFIG_DIR = "/etc/starkeep"
 # Promotional image GitHub builds per repo; survives forks/renames via config.
 # PNG lives next to starkeep-logo.svg so covers need no SVG rasterizer.
 DEFAULT_PLAYLIST_ICON = "https://raw.githubusercontent.com/unknown-Ric/starkeep/main/starkeep-logo.png"
+
+# Never written to config.yaml; they come from the environment (see save()).
+_SECRETS = ("lastfm_api_key", "subsonic_password")
 
 
 @dataclass
@@ -48,6 +60,8 @@ class Config:
     min_plays: int = 1            # Navidrome playCount >= this counts as "heard"
     carry_over_runs: int = 1      # extra passes for tracks that were never played
     downloader: str = "ytdlp"     # only "ytdlp" supported for now (MeTube later)
+    max_per_artist: int = 2       # variety cap: at most this many tracks per
+                                  # artist in one run's batch
     audio_format: str = "m4a"
     harvest_days: int = 7         # scrobble window feeding the harvest
     # Days before an expired candidate becomes harvestable again. 0 = the old
@@ -60,21 +74,23 @@ class Config:
     # WEBP/GIF/SVG URL can substitute it (SVG is rasterized server-side, needs
     # cairosvg); empty string disables the upload entirely.
     playlist_icon: str = DEFAULT_PLAYLIST_ICON
-    # The playlist starkeep deletes+recreates every run — players pin it by
-    # this name. Changing it orphans the old playlist: delete it manually.
+    # The playlist starkeep rebuilds every run (in place, id stays stable) —
+    # players pin it by this name. Changing it orphans the old playlist:
+    # delete it manually.
     playlist_name: str = "Starkeep Audition"
     # Cron monitoring (healthchecks.io style): GET on success, GET /fail on
     # error. Empty = disabled.
     ping_url: str = ""
 
     def with_api_key(self) -> "Config":
-        # credentials may live in the environment instead of config.yaml
+        # credentials may live in the environment instead of config.yaml;
+        # the environment wins so rotating a secret never needs a file edit
         env_key = os.environ.get("LASTFM_API_KEY", "")
         env_pw = os.environ.get("SUBSONIC_PASSWORD", "")
         updates = {}
-        if not self.lastfm_api_key and env_key:
+        if env_key:
             updates["lastfm_api_key"] = env_key
-        if not self.subsonic_password and env_pw:
+        if env_pw:
             updates["subsonic_password"] = env_pw
         return replace(self, **updates) if updates else self
 
@@ -93,6 +109,21 @@ def load(directory: str | Path = ".") -> Config | None:
     if unknown:
         print(f"warning: ignoring unknown config keys: {', '.join(sorted(unknown))}",
               file=sys.stderr)
+    for k in _INT_FIELDS:  # YAML happily yields cap: "30" as a string
+        if k in data and not isinstance(data[k], int):
+            try:
+                data[k] = int(data[k])
+            except (TypeError, ValueError):
+                print(f"warning: {k} must be a number, using the default",
+                      file=sys.stderr)
+                del data[k]
+    for k in _PATH_FIELDS:  # expand ~ and pin to one absolute path per config
+        if data.get(k):
+            pp = Path(str(data[k])).expanduser()
+            if not pp.is_absolute():
+                # relative to config.yaml, never to the cwd cron happens to use
+                pp = Path(directory).resolve() / pp
+            data[k] = str(pp.resolve())
     return Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
 
 
@@ -106,6 +137,13 @@ def first_run_setup(directory: str | Path = ".") -> Config:
         return val or default
 
     home = Path.home()
+    if Path("/config").is_dir():  # inside the Docker container: defaults must
+        # land on the persistent mounts (/music, /config), not the container FS
+        inc_def, lib_def, conf_def = "/music/_incoming", "/music/library", Path("/config")
+    else:
+        inc_def, lib_def, conf_def = (str(home / "music" / "_incoming"),
+                                      str(home / "music" / "library"),
+                                      home / ".starkeep")
     cfg = Config(
         lastfm_user=ask("Last.fm username"),
         subsonic_url=ask("Subsonic/Navidrome base URL", "http://localhost:4533"),
@@ -113,10 +151,10 @@ def first_run_setup(directory: str | Path = ".") -> Config:
         subsonic_password=getpass.getpass("  Subsonic password: "),
         # The audition folder must be scanned by Navidrome, otherwise you cannot
         # star tracks during the week.
-        incoming_dir=ask("Audition folder inside your Navidrome library", str(home / "music" / "_incoming")),
-        library_dir=ask("Permanent library root", str(home / "music" / "library")),
-        state_file=ask("State file path", str(home / ".starkeep" / "state.json")),
-        log_dir=ask("Log directory", str(home / ".starkeep" / "logs")),
+        incoming_dir=ask("Audition folder inside your Navidrome library", inc_def),
+        library_dir=ask("Permanent library root", lib_def),
+        state_file=ask("State file path", str(conf_def / "state.json")),
+        log_dir=ask("Log directory", str(conf_def / "logs")),
     )
     save(directory, cfg)
     print(f"\nSaved to {config_path(directory)} (permissions 600 where supported).")
@@ -133,7 +171,7 @@ def save(directory: str | Path, cfg: Config) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     defaults = Config()
     data = {k: v for k, v in cfg.__dict__.items()
-            if v != getattr(defaults, k)}
+            if v != getattr(defaults, k) and k not in _SECRETS}
     header = ("# starkeep config - only values that differ from the defaults.\n"
               "# Every option is documented in config.example.yaml.\n"
               "# Secrets (LASTFM_API_KEY, SUBSONIC_PASSWORD) live in the env.\n")
@@ -173,6 +211,8 @@ def validate(cfg: Config, require_lastfm: bool = True) -> list[str]:
         problems.append("similar_per_seed must be >= 1")
     if cfg.max_strikes < 1:
         problems.append("max_strikes must be >= 1")
+    if cfg.max_per_artist < 1:
+        problems.append("max_per_artist must be >= 1")
     if cfg.harvest_days < 1:
         problems.append("harvest_days must be >= 1")
     if cfg.requeue_after_days < 0:

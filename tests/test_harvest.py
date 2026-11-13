@@ -123,3 +123,80 @@ def test_cap_zero_is_decide_only(cfg):
 
     assert harvest.harvest(cfg, lfm, FakeSubsonic(), stt) == []
     assert stt["candidates"] == []
+
+
+def test_guest_credit_variants_are_deduped(cfg):
+    lfm = FakeLastfm(
+        seeds=[("Seed", "Song")],
+        similar=[("A", "One"), ("B", "One featuring Q-Tip"), ("B", "One (feat. Someone)"),
+                 ("A", "Two")],
+    )
+    stt = st.load(cfg.state_file)
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert [(p["artist"], p["title"]) for p in picked] == [
+        ("A", "One"), ("B", "One featuring Q-Tip"), ("A", "Two")]
+    titles = [c["title"] for c in stt["candidates"]]
+    assert "One (feat. Someone)" not in titles  # variant of B/One, skipped
+
+
+def test_variant_of_known_candidate_is_skipped(cfg):
+    lfm = FakeLastfm(seeds=[("Seed", "Song")], similar=[("A", "One featuring Q-Tip")])
+    stt = st.load(cfg.state_file)
+    st.add_candidate(stt, "A", "One", status="promoted")
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert picked == []  # "One" is owned; its feat-variant must not queue
+
+
+def test_per_artist_cap_keeps_variety(cfg):
+    lfm = FakeLastfm(
+        seeds=[("Seed", "Song")],
+        similar=[("A", "One"), ("A", "Two"), ("A", "Three"), ("B", "Four")],
+    )
+    stt = st.load(cfg.state_file)
+
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert [(p["artist"], p["title"]) for p in picked] == [("A", "One"), ("A", "Two"),
+                                                           ("B", "Four")]
+
+
+def test_seed_is_recorded_for_the_status_page(cfg):
+    lfm = FakeLastfm(seeds=[("Franz Ferdinand", "Walk Away")], similar=[("A", "One")])
+    stt = st.load(cfg.state_file)
+
+    harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    c = st.find_candidate(stt, "A", "One")
+    assert c["seed"] == "similar to Franz Ferdinand — Walk Away"
+
+
+def test_harvest_keeps_seeding_until_the_cap_is_full(cfg):
+    """30 cap + 3-per-seed used to end after the first 10 seeds: keep going."""
+    lfm = FakeLastfm(
+        seeds=[(f"Seed{i}", "Song") for i in range(20)],
+        similar=[(f"A{i}", f"Track{i}") for i in range(30)],  # 3 per seed
+    )
+    stt = st.load(cfg.state_file)
+
+    cfg = replace(cfg, cap=12, similar_per_seed=3)
+    picked = harvest.harvest(cfg, lfm, FakeSubsonic(), stt)
+
+    assert len(picked) == 12  # not capped at one seed-batch worth
+
+
+def test_harvest_cap_zero_makes_no_lastfm_calls(cfg):
+    """--cap 0 runs must not depend on Last.fm at all."""
+    class Boom:
+        def recent_track_seeds(self, **kw):
+            raise RuntimeError("lastfm down")
+
+        def similar_tracks(self, *a, **k):
+            raise RuntimeError("lastfm down")
+
+    stt = st.load(cfg.state_file)
+    assert harvest.harvest(replace(cfg, cap=0), Boom(), FakeSubsonic(), stt) == []
+    assert stt["candidates"] == []

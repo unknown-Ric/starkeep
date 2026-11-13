@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import logging
 import re
 import shutil
@@ -28,11 +29,6 @@ def safe_name(text: str) -> str:
     return _BAD_CHARS.sub("_", text).strip(" .")[:120]
 
 
-def yt_search_query(artist: str, title: str) -> str:
-    # Bias toward audio uploads (avoids most music-video/live junk).
-    return f"ytsearch1:{artist} - {title} audio"
-
-
 _VERSION_WORDS = re.compile(r"(?i)\b(live|cover|remix|karaoke|instrumental|acoustic)\b")
 
 
@@ -48,18 +44,22 @@ def _match_filters(artist: str, title: str, duration: int | None) -> str | None:
     return "&".join(filters) or None
 
 
-def _read_report(report: Path) -> Path | None:
-    """yt-dlp's `--print-to-file after_move:filepath` writes the final path."""
+def _read_report(report: Path) -> tuple[Path | None, str | None]:
+    """yt-dlp's `--print-to-file` writes '<video_id>\\t<final path>' per line."""
     try:
         lines = [ln.strip() for ln in report.read_text(encoding="utf-8").splitlines()]
     except OSError:
-        return None
+        return None, None
     for line in reversed(lines):
         if line:
+            vid: str | None = None
+            if "\t" in line:  # older reports (or fakes) contain only the path
+                vid, line = line.split("\t", 1)
+                line = line.strip()
             p = Path(line)
             if p.is_file():
-                return p
-    return None
+                return p, vid or None
+    return None, None
 
 
 def _discover_written(before: set[Path], incoming: Path, stem: str) -> Path | None:
@@ -181,19 +181,24 @@ def _embed_cover(path: Path, data: bytes) -> bool:
 
 def _existing_file(incoming: Path, stem: str) -> Path | None:
     """A finished file from an interrupted run (yt-dlp renames .part only when done)."""
+    # glob.escape: a stem with "[Remastered]" must not read as a char class
     matches = [
-        p for p in incoming.glob(f"{stem}.*")
+        p for p in incoming.glob(f"{glob.escape(stem)}.*")
         if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in AUDIO_EXTS
     ]
     return max(matches, key=lambda p: p.stat().st_mtime) if matches else None
 
 
-def download(cfg: Config, artist: str, title: str, duration: int | None = None) -> Path:
-    """Download exactly one track into incoming/. Returns the file actually written.
+def download(cfg: Config, artist: str, title: str,
+             duration: int | None = None, banned_ids: list[str] | None = None
+             ) -> tuple[Path, str | None]:
+    """Download exactly one track into incoming/. Returns (file, video id).
 
     `duration` (official seconds, from Last.fm) activates the wrong-version
     length filter. `audio_format: native` keeps the stream YouTube serves,
     i.e. no second lossy re-encode (it is still YouTube-grade audio).
+    `banned_ids` (video ids rejected by `forget`) skip those videos, taking
+    the next-best result instead of the same one.
     """
     if not YTDLP:
         raise RuntimeError("yt-dlp not found on PATH")
@@ -204,7 +209,7 @@ def download(cfg: Config, artist: str, title: str, duration: int | None = None) 
     existing = _existing_file(incoming, stem)
     if existing is not None:
         log.info("already downloaded, adopting: %s", existing.name)
-        return existing
+        return existing, None
 
     before = {p for p in incoming.iterdir() if p.is_file()}
     report = incoming / f".starkeep-{uuid.uuid4().hex}.path"
@@ -216,20 +221,31 @@ def download(cfg: Config, artist: str, title: str, duration: int | None = None) 
         "--embed-thumbnail", "--convert-thumbnails", "jpg",
         "-o", str(incoming / f"{stem}.%(ext)s"),
         "--no-playlist", "--quiet", "--no-warnings",
-        "--print-to-file", "after_move:filepath", str(report),
+        "--print-to-file", "after_move:%(id)s\t%(filepath)s", str(report),
     ]
     mf = _match_filters(artist, title, duration)
+    if banned_ids:
+        # ids come straight from yt-dlp's extractor: [A-Za-z0-9_-]{11}, regex-safe
+        exclude = "|".join(banned_ids)
+        mf = (mf + "&" if mf else "") + f"id!~^({exclude})$"
     if mf:
         cmd += ["--match-filters", mf]
-    cmd.append(yt_search_query(artist, title))
+    # 5 candidates + --max-downloads 1: a filtered-out top hit falls through
+    # to the next result instead of failing the track. rc 101 = limit reached.
+    cmd += ["--max-downloads", "1", f"ytsearch5:{artist} - {title} audio"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        if result.returncode != 0:
-            raise RuntimeError(f"yt-dlp failed (rc={result.returncode}): {result.stderr[-400:]}")
-        written = _read_report(report) or _discover_written(before, incoming, stem)
+        written, video_id = _read_report(report)
         if written is None:
-            raise RuntimeError("yt-dlp reported success but no new audio file was found")
-        return written
+            written = _discover_written(before, incoming, stem)
+        if written is None:
+            if result.returncode not in (0, 101):  # 101 = stopped at the limit
+                raise RuntimeError(
+                    f"yt-dlp failed (rc={result.returncode}): {result.stderr[-400:]}")
+            raise RuntimeError(
+                f"no result passed the filters for '{artist} - {title}' "
+                f"(live/cover/duration); nothing downloaded")
+        return written, video_id
     finally:
         report.unlink(missing_ok=True)
 
@@ -243,18 +259,24 @@ def download_all(cfg: Config, candidates: list[dict], stt: dict,
         try:
             # one Last.fm call feeds both the length filter and the tags
             info = lfm.track_album_info(artist, title) if lfm else None
-            path = download(cfg, artist, title, duration=(info or {}).get("duration"))
+            path, video_id = download(
+                cfg, artist, title, duration=(info or {}).get("duration"),
+                banned_ids=list(stt.get("banned_ids", [])))
             apply_full_tags(path, artist, title, lfm, info=info)
             c = st.find_candidate(stt, artist, title)
             if c:
                 c["status"] = "downloaded"
                 c["file_path"] = str(path)
+                c["video_id"] = video_id
                 c["downloaded_at"] = st.utcnow()
             log.info("downloaded %s - %s -> %s", artist, title, path.name)
             ok += 1
         except Exception as e:  # one bad candidate must not kill the batch
             log.error("download failed for %s - %s: %s", artist, title, e)
             st.strike(stt, artist, title)
+            c = st.find_candidate(stt, artist, title)
+            if c:
+                c["last_error"] = str(e)[:200]  # shown on the status page
         finally:  # persist after every candidate: crash mid-batch is fine
             st.save(cfg.state_file, stt)
     return ok
