@@ -12,6 +12,7 @@ from . import report as report_mod
 from . import state as st
 from .config import Config
 from .lastfm import LastfmClient
+from .listenbrainz import ListenbrainzClient
 from .subsonic import SubsonicClient
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
     with st.StateLock(cfg.state_file):  # prevent overlapping cron runs
         stt = st.load(cfg.state_file)
         lfm = LastfmClient(cfg.lastfm_api_key, cfg.lastfm_user) if cfg.lastfm_api_key else None
+        lb = ListenbrainzClient(cfg.listenbrainz_user) if cfg.listenbrainz_user else None
         sub = SubsonicClient(cfg.subsonic_url, cfg.subsonic_user, cfg.subsonic_password)
         sub.ping()
         stt["last_run"] = st.utcnow()
@@ -86,7 +88,7 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
         # A Last.fm outage must not skip promotion bookkeeping: the run still
         # re-stars, syncs the playlist and records itself.
         try:
-            candidates = harvest.harvest(cfg, lfm, sub, stt)
+            candidates = harvest.harvest(cfg, lfm, sub, stt, lb=lb)
         except Exception as e:
             log.error("harvest failed, continuing without downloads: %s", e)
             candidates = []
@@ -110,6 +112,14 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             log.warning("audition playlist sync failed: %s", e)
             pl = {}
 
+        mix = {}
+        if cfg.mix_playlist_name and expire and (downloaded or decision["keeps"]):
+            try:
+                mix = playlist.sync_mix(sub, stt, name=cfg.mix_playlist_name,
+                                        top_limit=cfg.mix_top_limit)
+            except Exception as e:
+                log.warning("mix playlist sync failed: %s", e)
+
         result = {
             "candidates": len(candidates),
             "downloaded": downloaded,
@@ -117,6 +127,7 @@ def run(cfg: Config, dry_run: bool = False, expire: bool = True) -> dict:
             "expires": decision["deletes"],
             "orphans": report["orphans"],
             "playlist": pl,
+            "mix_playlist": mix,
         }
         # per-run record for the status.html two-period view (full runs open a
         # new period; promote passes accumulate into the running one).

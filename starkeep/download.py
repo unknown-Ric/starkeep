@@ -16,6 +16,7 @@ import mutagen.mp4
 import requests
 
 from . import state as st
+from . import qobuz as qobuz_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -192,14 +193,17 @@ def _existing_file(incoming: Path, stem: str) -> Path | None:
 def download(cfg: Config, artist: str, title: str,
              duration: int | None = None, banned_ids: list[str] | None = None
              ) -> tuple[Path, str | None]:
-    """Download exactly one track into incoming/. Returns (file, video id).
+    """Download exactly one track into incoming/. Returns (file, external_id).
 
-    `duration` (official seconds, from Last.fm) activates the wrong-version
-    length filter. `audio_format: native` keeps the stream YouTube serves,
-    i.e. no second lossy re-encode (it is still YouTube-grade audio).
-    `banned_ids` (video ids rejected by `forget`) skip those videos, taking
-    the next-best result instead of the same one.
+    Dispatches on cfg.downloader: 'ytdlp' (YouTube via yt-dlp) or 'qobuz'
+    (FLAC via Qobuz API). `duration` and `banned_ids` only apply to yt-dlp.
     """
+    if cfg.downloader == "qobuz":
+        path, track_id, info = qobuz_mod.qobuz_download(
+            artist, title, cfg.incoming_dir)
+        return path, str(track_id)
+
+    # --- ytdlp path (original) ---
     if not YTDLP:
         raise RuntimeError("yt-dlp not found on PATH")
     incoming = Path(cfg.incoming_dir)

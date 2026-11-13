@@ -19,6 +19,7 @@ from . import report as report_mod
 from . import runner
 from . import state as st
 from .lastfm import LastfmClient
+from .qobuz import download_album as qobuz_download_album
 from .subsonic import SubsonicClient
 
 
@@ -121,11 +122,14 @@ def doctor(cfg) -> int:
         print(f"[FAIL] Subsonic: {e}")
         ok = False
 
-    if shutil.which("yt-dlp"):
-        print("[ OK ] yt-dlp found on PATH")
+    if cfg.downloader == "ytdlp":
+        if shutil.which("yt-dlp"):
+            print("[ OK ] yt-dlp found on PATH")
+        else:
+            print("[FAIL] yt-dlp not on PATH (pipx install yt-dlp)")
+            ok = False
     else:
-        print("[FAIL] yt-dlp not on PATH (pipx install yt-dlp)")
-        ok = False
+        print(f"[INFO] downloader={cfg.downloader} — yt-dlp not required")
     if shutil.which("ffmpeg"):
         print("[ OK ] ffmpeg found on PATH")
     else:
@@ -194,6 +198,11 @@ def main() -> None:
     sub.add_parser("config", help="effective configuration: set vs default values")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
+    qobuz_p = sub.add_parser("qobuz", help="manual whole-album pull from Qobuz")
+    qobuz_p.add_argument("query", help='"Artist - Album" or free-text search query')
+    qobuz_p.add_argument("--force", action="store_true",
+                         help="re-download even if files already exist (NOT YET IMPLEMENTED — "
+                              "existing files are always skipped)")
     # --config-dir also accepted after the subcommand (SUPPRESS: don't mask
     # the global default ".")
     for p in sub.choices.values():
@@ -262,6 +271,25 @@ def main() -> None:
         sys.exit(0)
     if args.cmd == "doctor":
         sys.exit(doctor(cfg))
+    if args.cmd == "qobuz":
+        config_mod.validate(cfg, require_lastfm=False)
+        if not cfg.library_dir:
+            print("error: library_dir not set in config", file=sys.stderr)
+            sys.exit(1)
+        print(f"Searching Qobuz for: {args.query!r}\n")
+        try:
+            files = qobuz_download_album(args.query, cfg.library_dir)
+        except Exception as e:
+            print(f"qobuz album download failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        if files:
+            print(f"\nDownloaded {len(files)} track(s):")
+            for f in files:
+                print(f"  {f}  ({f.stat().st_size / 1024:.0f} KB)")
+        else:
+            print("\nAll tracks already present — nothing downloaded.")
+        print("\nNavidrome should pick these up on its next scan cycle.")
+        sys.exit(0)
     if args.cmd in ("run", "dry-run"):
         config_mod.ensure_dirs(cfg)
         # the API key only matters when this run will actually download

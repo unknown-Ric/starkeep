@@ -46,10 +46,14 @@ def _skey(artist: str, title: str) -> tuple[str, str]:
     return _strip_feat(artist), _strip_feat(title)
 
 
-def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> list[dict]:
+def harvest(cfg: Config, lfm: LastfmClient | None, sub: SubsonicClient, stt: dict,
+            lb=None) -> list[dict]:
     """Return up to cfg.cap queued candidates, freshly added/updated in state.
 
-    Source: most-played tracks of the last 7 days -> track.getSimilar for each.
+    Sources (in order):
+      - Last.fm: most-played tracks of the last N days -> track.getSimilar
+      - ListenBrainz (optional): the current week's algorithm playlists
+        (Weekly Exploration / Weekly Jams)
     Dedupes against:
       - candidates already in state (terminal ones and strike-hot ones skipped,
         transient failures retried while strikes < max_strikes)
@@ -60,9 +64,25 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
     """
     if cfg.cap <= 0:  # --cap 0 = decide-only run: no Last.fm calls at all
         return []
-    seeds = lfm.recent_track_seeds(days=cfg.harvest_days, limit=100)
-    if not seeds:
-        log.warning("no recent scrobbles — harvest produced nothing (run skipped safely)")
+    sources: list[tuple[str, str, str]] = []  # (artist, title, seed_label)
+    if lfm is not None:
+        seeds = lfm.recent_track_seeds(days=cfg.harvest_days, limit=100)
+        if not seeds:
+            log.warning("no recent scrobbles — Last.fm source produced nothing")
+        for seed_artist, seed_title in seeds:
+            for artist, title in lfm.similar_tracks(seed_artist, seed_title,
+                                                    cfg.similar_per_seed):
+                sources.append((artist, title, _seed_label(seed_artist, seed_title)))
+    if lb is not None:
+        try:
+            for t in lb.weekly_candidates(cfg.listenbrainz_tracks):
+                sources.append((t["artist"], t["title"],
+                                f"listenbrainz {t['source']}"))
+        except Exception as e:
+            log.warning("ListenBrainz harvest failed: %s", e)
+    if not sources:
+        log.warning("no discovery candidates (no scrobbles, no LB playlists) — "
+                    "run skipped safely")
         return []
     release_expired(cfg, stt)
     blocklist = blacklist.load(cfg.blacklist_file)
@@ -75,61 +95,56 @@ def harvest(cfg: Config, lfm: LastfmClient, sub: SubsonicClient, stt: dict) -> l
     picked: list[dict] = []
     seen: set[tuple[str, str]] = set()
     artist_picks: dict[str, int] = {}
-    for seed_artist, seed_title in seeds:  # keep seeding until the cap is full
-        for artist, title in lfm.similar_tracks(seed_artist, seed_title,
-                                                cfg.similar_per_seed):
-            if not artist or not title:
-                continue
-            key = st.candidate_key(artist, title)
-            skey = _skey(artist, title)
-            if key in seen or skey in seen:
-                continue
-            seen.add(key)
-            seen.add(skey)
+    for artist, title, seed in sources:
+        if not artist or not title:
+            continue
+        key = st.candidate_key(artist, title)
+        skey = _skey(artist, title)
+        if key in seen or skey in seen:
+            continue
+        seen.add(key)
+        seen.add(skey)
 
-            existing = variants.get(skey, [])
-            exact = [e for e in existing if st.candidate_key(e["artist"], e["title"]) == key]
-            if not exact and existing:
-                # a differently-credited version of a known candidate, not the
-                # same exact track (that case is queue_decision's job) — don't
-                # queue both
-                log.info("variant of known candidate, skipping: %s - %s",
-                         artist, title)
-                continue
+        existing = variants.get(skey, [])
+        exact = [e for e in existing if st.candidate_key(e["artist"], e["title"]) == key]
+        if not exact and existing:
+            # a differently-credited version of a known candidate, not the
+            # same exact track (that case is queue_decision's job) — don't
+            # queue both
+            log.info("variant of known candidate, skipping: %s - %s",
+                     artist, title)
+            continue
 
-            if artist_picks.get(skey[0], 0) >= cfg.max_per_artist:
-                log.info("per-artist cap %d reached, skipping: %s - %s",
-                         cfg.max_per_artist, artist, title)
-                continue
+        if artist_picks.get(skey[0], 0) >= cfg.max_per_artist:
+            log.info("per-artist cap %d reached, skipping: %s - %s",
+                     cfg.max_per_artist, artist, title)
+            continue
 
-            if blacklist.blacklisted(blocklist, artist, title):
-                log.info("blacklisted, skipping: %s - %s", artist, title)
-                continue
+        if blacklist.blacklisted(blocklist, artist, title):
+            log.info("blacklisted, skipping: %s - %s", artist, title)
+            continue
 
-            decision = st.queue_decision(stt, artist, title, cfg.max_strikes)
-            if decision == "skip":
-                continue
-            if decision == "new" and sub.song_exists(artist, title):
-                log.info("already in library, skipping: %s - %s", artist, title)
-                st.add_candidate(stt, artist, title, status="skipped-owned",
-                                 seed=_seed_label(seed_artist, seed_title))
-                st.save(cfg.state_file, stt)
-                continue
-            if decision == "retry":
-                c = st.find_candidate(stt, artist, title)
-                if c:
-                    c["status"] = "queued"
-                    c["seed"] = _seed_label(seed_artist, seed_title)
-                    log.info("retrying (strike %d/%d): %s - %s",
-                             c.get("strikes", 0), cfg.max_strikes, artist, title)
-            elif decision == "new":
-                st.add_candidate(stt, artist, title, status="queued",
-                                 seed=_seed_label(seed_artist, seed_title))
+        decision = st.queue_decision(stt, artist, title, cfg.max_strikes)
+        if decision == "skip":
+            continue
+        if decision == "new" and sub.song_exists(artist, title):
+            log.info("already in library, skipping: %s - %s", artist, title)
+            st.add_candidate(stt, artist, title, status="skipped-owned",
+                             seed=seed)
+            st.save(cfg.state_file, stt)
+            continue
+        if decision == "retry":
+            c = st.find_candidate(stt, artist, title)
+            if c:
+                c["status"] = "queued"
+                c["seed"] = seed
+                log.info("retrying (strike %d/%d): %s - %s",
+                         c.get("strikes", 0), cfg.max_strikes, artist, title)
+        elif decision == "new":
+            st.add_candidate(stt, artist, title, status="queued", seed=seed)
 
-            picked.append({"artist": artist, "title": title})
-            artist_picks[skey[0]] = artist_picks.get(skey[0], 0) + 1
-            if len(picked) >= cfg.cap:
-                break
+        picked.append({"artist": artist, "title": title})
+        artist_picks[skey[0]] = artist_picks.get(skey[0], 0) + 1
         if len(picked) >= cfg.cap:
             break
 
