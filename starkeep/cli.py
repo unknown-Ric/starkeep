@@ -203,6 +203,13 @@ def main() -> None:
     qobuz_p.add_argument("--force", action="store_true",
                          help="re-download even if files already exist (NOT YET IMPLEMENTED — "
                               "existing files are always skipped)")
+    radio_p = sub.add_parser(
+        "radio", help="build a 'related music radio' Navidrome playlist from a seed track")
+    radio_p.add_argument("seed", help='seed track, "Artist - Title" (or just a title)')
+    radio_p.add_argument("--count", type=int, default=15,
+                         help="max related tracks to fetch (default 15)")
+    radio_p.add_argument("--playlist", default=None,
+                         help="playlist name (default: 'Radio: <seed>')")
     # --config-dir also accepted after the subcommand (SUPPRESS: don't mask
     # the global default ".")
     for p in sub.choices.values():
@@ -289,6 +296,28 @@ def main() -> None:
         else:
             print("\nAll tracks already present — nothing downloaded.")
         print("\nNavidrome should pick these up on its next scan cycle.")
+        sys.exit(0)
+    if args.cmd == "radio":
+        problems = config_mod.validate(cfg)
+        if problems:
+            print("config problems (run `starkeep doctor` for details):")
+            for problem in problems:
+                print(f"  - {problem}")
+            sys.exit(1)
+        from . import radio as radio_mod
+        import logging as _logging
+        _logging.basicConfig(level=_logging.INFO,
+                             format="%(asctime)s %(levelname)s %(message)s",
+                             datefmt="%H:%M:%S")
+        try:
+            result = radio_mod.run_radio(cfg, args.seed,
+                                         count=args.count,
+                                         playlist=args.playlist)
+        except Exception as e:
+            print(f"radio build failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(result, indent=2, default=str))
+        print(f"\nPlay the playlist '{result['playlist']}' on shuffle in NaviBeat to keep the music going.")
         sys.exit(0)
     if args.cmd in ("run", "dry-run"):
         config_mod.ensure_dirs(cfg)

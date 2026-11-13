@@ -381,7 +381,12 @@ def _pick_best_album(albums: list[dict], query: str) -> dict | None:
 
 def _tag_flac(path: Path, artist: str, title: str, album: str,
               track_number: int | None, cover_url: str | None = None) -> None:
-    """Write basic tags (+ cover for FLAC). Best-effort: never fails the download."""
+    """Write basic tags (+ cover for FLAC). Best-effort: never fails the download.
+
+    The cover-image fetch is isolated in its own try so that a cover failure
+    (e.g. an expired/signed Qobuz image URL returning 403) can no longer skip
+    ``m.save()`` and leave the file with no tags at all.
+    """
     try:
         from mutagen import File as MutagenFile
         m = MutagenFile(str(path), easy=True)
@@ -394,15 +399,18 @@ def _tag_flac(path: Path, artist: str, title: str, album: str,
         if track_number:
             m["tracknumber"] = str(track_number)
         if path.suffix.lower() == ".flac" and cover_url:
-            from mutagen.flac import FLAC, Picture
-            r = requests.get(cover_url, timeout=30)
-            r.raise_for_status()
-            pic = Picture()
-            pic.type = 3  # cover front
-            pic.mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0]
-            pic.desc = "cover"
-            pic.data = r.content
-            m["picture"] = [pic]
+            try:
+                from mutagen.flac import Picture
+                r = requests.get(cover_url, timeout=30)
+                r.raise_for_status()
+                pic = Picture()
+                pic.type = 3  # cover front
+                pic.mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0]
+                pic.desc = "cover"
+                pic.data = r.content
+                m["picture"] = [pic]
+            except Exception as ce:
+                log.warning("cover art failed for %s: %s", path.name, ce)
         m.save()
     except Exception as e:
         log.warning("tagging failed for %s: %s", path.name, e)
