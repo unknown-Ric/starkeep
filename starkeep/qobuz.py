@@ -383,9 +383,9 @@ def _tag_flac(path: Path, artist: str, title: str, album: str,
               track_number: int | None, cover_url: str | None = None) -> None:
     """Write basic tags (+ cover for FLAC). Best-effort: never fails the download.
 
-    The cover-image fetch is isolated in its own try so that a cover failure
-    (e.g. an expired/signed Qobuz image URL returning 403) can no longer skip
-    ``m.save()`` and leave the file with no tags at all.
+    Tags are written via EasyMode; the cover is embedded via the native
+    FLAC picture-block API (EasyMode's ``picture`` key is unreliable on
+    mutagen >= 1.48).
     """
     try:
         from mutagen import File as MutagenFile
@@ -398,30 +398,36 @@ def _tag_flac(path: Path, artist: str, title: str, album: str,
         m["album"] = album
         if track_number:
             m["tracknumber"] = str(track_number)
-        if path.suffix.lower() == ".flac" and cover_url:
-            try:
-                from mutagen.flac import Picture
-                r = requests.get(cover_url, timeout=30)
-                r.raise_for_status()
-                pic = Picture()
-                pic.type = 3  # cover front
-                pic.mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0]
-                pic.desc = "cover"
-                pic.data = r.content
-                m["picture"] = [pic]
-            except Exception as ce:
-                log.warning("cover art failed for %s: %s", path.name, ce)
         m.save()
     except Exception as e:
         log.warning("tagging failed for %s: %s", path.name, e)
+        return
+    if path.suffix.lower() == ".flac" and cover_url:
+        try:
+            from mutagen.flac import FLAC, Picture
+            r = requests.get(cover_url, timeout=30)
+            r.raise_for_status()
+            pic = Picture()
+            pic.type = 3  # cover front
+            pic.mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0]
+            pic.desc = ""
+            pic.data = r.content
+            f = FLAC(str(path))
+            f.clear_pictures()
+            f.add_picture(pic)
+            f.save()
+        except Exception as ce:
+            log.warning("cover art failed for %s: %s", path.name, ce)
 
 
-def download_album(query: str, library_dir: str) -> list[Path]:
+def download_album(query: str, library_dir: str, dry_run: bool = False) -> list[Path]:
     """Manual whole-album pull (user-triggered): Qobuz search -> album/get ->
     every track to <library_dir>/<Artist>/<Album>/NN. Title.<ext>.
 
     Idempotent: existing destination files are skipped. Returns the list of
     files actually downloaded this call (empty if the album was already there).
+    With ``dry_run`` the album is resolved and the planned files are returned
+    without downloading (no per-track sample check is performed).
     """
     client = QobuzClient()
     albums = client.search_albums(query, limit=15)
@@ -444,19 +450,23 @@ def download_album(query: str, library_dir: str) -> list[Path]:
     artist_s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", artist).strip()[:80]
     album_s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", album_title).strip()[:80]
     album_dir = Path(library_dir).expanduser() / artist_s / album_s
-    album_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        album_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded: list[Path] = []
     for t in tracks:
         title = t.get("title") or ""
         tno = t.get("track_number") or 0
         ext_guess = ".flac"
-        stem = f"{tno:02d}. {re.sub(r'[<>:\"/\\\\|?*\x00-\x1f]', '_', title).strip()}" \
+        stem = f"{tno:02d}. {re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title).strip()}" \
             if tno else title
         dest = album_dir / f"{stem}{ext_guess}"
         # idempotency: allow either flac/mp3 already present for this stem
         if dest.exists() or (album_dir / f"{stem}.mp3").exists():
             log.info("skip (exists): %s/%s", album_s, dest.name)
+            continue
+        if dry_run:
+            downloaded.append(dest)
             continue
         dl = client.get_download_url(t["id"])
         if dl["is_sample"]:
@@ -547,3 +557,110 @@ def qobuz_download(
     log.info("Downloaded: %s (%.1f KB)", dest.name, dest.stat().st_size / 1024)
 
     return dest, best["id"], best
+
+
+def download_track(query: str, library_dir: str, dry_run: bool = False) -> dict:
+    """Manual single-track pull (user-triggered): Qobuz track search → best
+    match → download to the library.
+
+    ``query`` is "Artist - Title" or just "Title" (artist taken from the
+    match). The file is placed using the same layout as :func:`download_album`:
+    ``<library_dir>/<Artist>/<Album>/NN. Title.<ext>``, falling back to
+    ``<library_dir>/<Artist> - <Title>.<ext>`` when the album is unknown.
+
+    Idempotent: existing destination (flac or mp3) is skipped.
+    With ``dry_run`` the match and destination are resolved but nothing is
+    downloaded (no sample check performed).
+
+    Returns ``{artist, title, album, track_number, dest, downloaded}``.
+    """
+    client = QobuzClient()
+
+    artist, title = "", query.strip()
+    if " - " in query:
+        artist, title = (s.strip() for s in query.split(" - ", 1))
+
+    tracks = client.search_tracks(f"{artist} {title}".strip(), limit=15)
+    if not tracks:
+        raise RuntimeError(f"No Qobuz track results for '{query}'")
+
+    na, nt = _norm(artist), _norm(title)
+    best, best_score = None, -1
+    for t in tracks:
+        score = 0
+        ta, tt = _norm(t["artist"]), _norm(t["title"])
+        if artist:
+            if ta == na and tt == nt:
+                score = 100
+            elif ta == na:
+                score = 60
+            elif tt == nt:
+                score = 40
+        elif tt == nt:
+            score = 60
+        if t.get("is_downloadable"):
+            score += 10
+        combined = f"{t['title']} {t['artist']}".lower()
+        if any(w in combined for w in ("remix", "live", "cover", "karaoke", "demo")):
+            score -= 50
+        if score > best_score:
+            best_score, best = score, t
+    if best is None or best_score < 40:
+        raise RuntimeError(
+            f"No good Qobuz match for '{query}' "
+            f"(best: {best['artist'] if best else 'N/A'} - "
+            f"{best['title'] if best else 'N/A'}, score={best_score})"
+        )
+
+    artist_name = best["artist"] or artist
+    album_title = best.get("album") or ""
+    tno = best.get("track_number")
+    log.info("track match: %s - %s (track %d, album: %s, score=%d)",
+             artist_name, best["title"], best["id"], album_title or "?", best_score)
+
+    # Resolve download format (skip in dry-run to avoid per-track API calls)
+    dl = None
+    if not dry_run:
+        dl = client.get_download_url(best["id"])
+        if dl["is_sample"]:
+            raise RuntimeError(
+                f"Qobuz only has a sample for {artist_name} - {best['title']}")
+    ext = ".mp3" if (dl is not None and "flac" not in dl.get("mime_type", "")) else ".flac"
+
+    # Build destination path (mirror download_album layout)
+    artist_s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", artist_name).strip()[:80]
+    title_s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", best["title"]).strip()
+    stem = f"{tno:02d}. {title_s}" if tno else title_s
+    if album_title:
+        album_s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", album_title).strip()[:80]
+        dest = Path(library_dir).expanduser() / artist_s / album_s / f"{stem}{ext}"
+    else:
+        dest = Path(library_dir).expanduser() / f"{artist_s} - {title_s}{ext}"
+
+    exists = (dest.exists() or dest.with_suffix(".flac").exists()
+              or dest.with_suffix(".mp3").exists())
+
+    result = {
+        "artist": artist_name,
+        "title": best["title"],
+        "album": album_title,
+        "track_number": tno,
+        "dest": dest,
+        "downloaded": False,
+    }
+    if exists:
+        log.info("skip (exists): %s", dest)
+        return result
+    if dry_run:
+        log.info("dry run: %s", dest)
+        return result
+    assert dl is not None
+
+    client.download_file(dl["url"], dest)
+    _tag_flac(dest, artist_name, best["title"], album_title, tno,
+              best.get("image"))
+    log.info("downloaded: %s (%.1f KB, %s-bit/%s Hz)", dest.name,
+             dest.stat().st_size / 1024,
+             dl.get("bit_depth"), dl.get("sampling_rate"))
+    result["downloaded"] = True
+    return result

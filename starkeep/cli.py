@@ -20,6 +20,7 @@ from . import runner
 from . import state as st
 from .lastfm import LastfmClient
 from .qobuz import download_album as qobuz_download_album
+from .qobuz import download_track as qobuz_download_track
 from .subsonic import SubsonicClient
 
 
@@ -198,8 +199,22 @@ def main() -> None:
     sub.add_parser("config", help="effective configuration: set vs default values")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
-    qobuz_p = sub.add_parser("qobuz", help="manual whole-album pull from Qobuz")
-    qobuz_p.add_argument("query", help='"Artist - Album" or free-text search query')
+    qobuz_p = sub.add_parser(
+        "qobuz", help="manual pull from Qobuz (whole album, or one track with --track)")
+    qobuz_p.add_argument(
+        "query",
+        help='"Artist - Album" or free-text search; with --track: "Artist - Title" or just a title',
+    )
+    qobuz_p.add_argument(
+        "--track",
+        action="store_true",
+        help="pull a single track instead of the matched album",
+    )
+    qobuz_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the match and destination without downloading",
+    )
     qobuz_p.add_argument("--force", action="store_true",
                          help="re-download even if files already exist (NOT YET IMPLEMENTED — "
                               "existing files are always skipped)")
@@ -283,19 +298,45 @@ def main() -> None:
         if not cfg.library_dir:
             print("error: library_dir not set in config", file=sys.stderr)
             sys.exit(1)
+        if args.track:
+            print(f"Searching Qobuz for track: {args.query!r}\n")
+            try:
+                res = qobuz_download_track(args.query, cfg.library_dir,
+                                           dry_run=args.dry_run)
+            except Exception as e:
+                print(f"qobuz track download failed: {e}", file=sys.stderr)
+                sys.exit(1)
+            suffix = f"  [album: {res['album']}]" if res["album"] else ""
+            print(f"Match: {res['artist']} - {res['title']}{suffix}")
+            print(f"Destination: {res['dest']}")
+            if res["downloaded"]:
+                print(f"Downloaded: {res['dest'].name} "
+                      f"({res['dest'].stat().st_size / 1024:.0f} KB)")
+                print("\nNavidrome should pick this up on its next scan cycle.")
+            elif args.dry_run:
+                print("\nDry run — nothing downloaded.")
+            else:
+                print("\nAlready present — nothing downloaded.")
+            sys.exit(0)
         print(f"Searching Qobuz for: {args.query!r}\n")
         try:
-            files = qobuz_download_album(args.query, cfg.library_dir)
+            files = qobuz_download_album(args.query, cfg.library_dir,
+                                         dry_run=args.dry_run)
         except Exception as e:
-            print(f"qobuz album download failed: {e}", file=sys.stderr)
+            print(f"qobuz download failed: {e}", file=sys.stderr)
             sys.exit(1)
-        if files:
-            print(f"\nDownloaded {len(files)} track(s):")
+        if not files:
+            print("Nothing new to download (album may already be present).")
+        elif args.dry_run:
             for f in files:
-                print(f"  {f}  ({f.stat().st_size / 1024:.0f} KB)")
+                print(f"  {f}")
+            print(f"\nWould download {len(files)} track(s) to:\n  {cfg.library_dir}")
+            print("Dry run — nothing downloaded.")
         else:
-            print("\nAll tracks already present — nothing downloaded.")
-        print("\nNavidrome should pick these up on its next scan cycle.")
+            for f in files:
+                print(f"  {f}")
+            print(f"\nDownloaded {len(files)} track(s) to:\n  {cfg.library_dir}")
+            print("\nNavidrome should pick these up on its next scan cycle.")
         sys.exit(0)
     if args.cmd == "radio":
         problems = config_mod.validate(cfg)
