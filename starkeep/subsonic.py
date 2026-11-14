@@ -148,6 +148,32 @@ class SubsonicClient:
         log.warning("library scan still running after %.0fs; continuing", timeout)
         return False
 
+    def get_top_songs(self, count: int = 50) -> list[dict]:
+        """Top-played songs by the current user (Navidrome honours per-user
+        play counts; other servers may return global counts or error).
+        Returns [{id, artist, title}] ordered most-played first.
+        Falls back to starred songs if getTopSongs is unavailable."""
+        try:
+            data = self._call("getTopSongs", count=str(count), username="me")
+            songs = data.get("topSongs", {}).get("song", [])
+            if songs:
+                return [
+                    {"id": s["id"], "artist": s.get("artist", ""), "title": s.get("title", "")}
+                    for s in songs
+                ]
+        except RuntimeError as e:
+            log.info("getTopSongs unavailable, falling back to starred: %s", e)
+        # Fallback: starred songs as a proxy for favorites
+        try:
+            data = self._call("getStarred", count=str(count))
+            songs = data.get("stars", {}).get("song", [])
+            return [
+                {"id": s["id"], "artist": s.get("artist", ""), "title": s.get("title", "")}
+                for s in songs
+            ]
+        except RuntimeError:
+            return []
+
     # ---- audition playlist -------------------------------------------------
 
     def search_songs(self, artist: str, title: str, limit: int = 10) -> list[dict]:

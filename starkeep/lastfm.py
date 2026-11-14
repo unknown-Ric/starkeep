@@ -75,6 +75,15 @@ class LastfmClient:
             log.warning("artist.getSimilar failed for %s: %s", artist, e)
             return []
 
+    def artist_top_tracks(self, artist: str, limit: int = 3) -> list[tuple[str, str]]:
+        try:
+            data = self._call("artist.getTopTracks", artist=artist, limit=str(limit))
+            ts = data.get("toptracks", {}).get("track", [])
+            return [(_fmt(t.get("artist")), t["name"]) for t in ts if t.get("name")]
+        except Exception as e:
+            log.warning("artist.getTopTracks failed for %s: %s", artist, e)
+            return []
+
     def track_album_info(self, artist: str, title: str) -> dict | None:
         """Album enrichment at promotion time: {'album': ..., 'track_number': ...}."""
         try:

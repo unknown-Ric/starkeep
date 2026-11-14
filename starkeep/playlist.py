@@ -87,3 +87,36 @@ def _sync_icon(sub: SubsonicClient, pl_id: str, icon_url: str) -> dict:
 def _svg_to_png(svg: bytes) -> bytes:
     import cairosvg  # optional dep; SVG cover art is not first-class on navidrome
     return cairosvg.svg2png(bytestring=svg, output_width=512, output_height=512)
+
+
+def sync_mix(sub: SubsonicClient, stt: dict, name: str = "Starkeep Mix",
+             top_limit: int = 50) -> dict:
+    """Library Mix: top-played library songs + this run's new downloads.
+
+    Blends the user's most-played tracks with freshly downloaded candidates,
+    creating a Spotify-style personal mix that evolves each run.
+    """
+    new_ids: list[str] = []
+    seen: set[str] = set()
+    for c in stt["candidates"]:
+        if c.get("status") != "downloaded":
+            continue
+        sid = _song_id_for(sub, c)
+        if sid and sid not in seen:
+            seen.add(sid)
+            new_ids.append(sid)
+
+    top = sub.get_top_songs(count=top_limit)
+    top_ids = [s["id"] for s in top if s["id"] not in seen]
+
+    # New downloads first (fresh stuff at the top), then top-played
+    song_ids = (new_ids + top_ids)[: top_limit + len(new_ids)]
+    if not song_ids:
+        log.info("mix playlist: nothing to write (no new + no top songs)")
+        return {"playlist": name, "songs": 0, "new": 0, "top": 0}
+
+    pl_id = sub.replace_playlist(name, song_ids)
+    log.info("Library Mix updated: %d new + %d top = %d songs",
+             len(new_ids), len(top_ids), len(song_ids))
+    return {"playlist": name, "songs": len(song_ids),
+            "new": len(new_ids), "top": len(top_ids)}

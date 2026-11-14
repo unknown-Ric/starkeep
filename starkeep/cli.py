@@ -19,6 +19,8 @@ from . import report as report_mod
 from . import runner
 from . import state as st
 from .lastfm import LastfmClient
+from .qobuz import download_album as qobuz_download_album
+from .qobuz import download_track as qobuz_download_track
 from .subsonic import SubsonicClient
 
 
@@ -121,11 +123,14 @@ def doctor(cfg) -> int:
         print(f"[FAIL] Subsonic: {e}")
         ok = False
 
-    if shutil.which("yt-dlp"):
-        print("[ OK ] yt-dlp found on PATH")
+    if cfg.downloader == "ytdlp":
+        if shutil.which("yt-dlp"):
+            print("[ OK ] yt-dlp found on PATH")
+        else:
+            print("[FAIL] yt-dlp not on PATH (pipx install yt-dlp)")
+            ok = False
     else:
-        print("[FAIL] yt-dlp not on PATH (pipx install yt-dlp)")
-        ok = False
+        print(f"[INFO] downloader={cfg.downloader} — yt-dlp not required")
     if shutil.which("ffmpeg"):
         print("[ OK ] ffmpeg found on PATH")
     else:
@@ -194,6 +199,32 @@ def main() -> None:
     sub.add_parser("config", help="effective configuration: set vs default values")
     sub.add_parser("doctor", help="validate config, connectivity and dependencies")
     sub.add_parser("show-state", help="print raw state.json")
+    qobuz_p = sub.add_parser(
+        "qobuz", help="manual pull from Qobuz (whole album, or one track with --track)")
+    qobuz_p.add_argument(
+        "query",
+        help='"Artist - Album" or free-text search; with --track: "Artist - Title" or just a title',
+    )
+    qobuz_p.add_argument(
+        "--track",
+        action="store_true",
+        help="pull a single track instead of the matched album",
+    )
+    qobuz_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the match and destination without downloading",
+    )
+    qobuz_p.add_argument("--force", action="store_true",
+                         help="re-download even if files already exist (NOT YET IMPLEMENTED — "
+                              "existing files are always skipped)")
+    radio_p = sub.add_parser(
+        "radio", help="build a 'related music radio' Navidrome playlist from a seed track")
+    radio_p.add_argument("seed", help='seed track, "Artist - Title" (or just a title)')
+    radio_p.add_argument("--count", type=int, default=15,
+                         help="max related tracks to fetch (default 15)")
+    radio_p.add_argument("--playlist", default=None,
+                         help="playlist name (default: 'Radio: <seed>')")
     # --config-dir also accepted after the subcommand (SUPPRESS: don't mask
     # the global default ".")
     for p in sub.choices.values():
@@ -262,6 +293,73 @@ def main() -> None:
         sys.exit(0)
     if args.cmd == "doctor":
         sys.exit(doctor(cfg))
+    if args.cmd == "qobuz":
+        config_mod.validate(cfg, require_lastfm=False)
+        if not cfg.library_dir:
+            print("error: library_dir not set in config", file=sys.stderr)
+            sys.exit(1)
+        if args.track:
+            print(f"Searching Qobuz for track: {args.query!r}\n")
+            try:
+                res = qobuz_download_track(args.query, cfg.library_dir,
+                                           dry_run=args.dry_run)
+            except Exception as e:
+                print(f"qobuz track download failed: {e}", file=sys.stderr)
+                sys.exit(1)
+            suffix = f"  [album: {res['album']}]" if res["album"] else ""
+            print(f"Match: {res['artist']} - {res['title']}{suffix}")
+            print(f"Destination: {res['dest']}")
+            if res["downloaded"]:
+                print(f"Downloaded: {res['dest'].name} "
+                      f"({res['dest'].stat().st_size / 1024:.0f} KB)")
+                print("\nNavidrome should pick this up on its next scan cycle.")
+            elif args.dry_run:
+                print("\nDry run — nothing downloaded.")
+            else:
+                print("\nAlready present — nothing downloaded.")
+            sys.exit(0)
+        print(f"Searching Qobuz for: {args.query!r}\n")
+        try:
+            files = qobuz_download_album(args.query, cfg.library_dir,
+                                         dry_run=args.dry_run)
+        except Exception as e:
+            print(f"qobuz download failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not files:
+            print("Nothing new to download (album may already be present).")
+        elif args.dry_run:
+            for f in files:
+                print(f"  {f}")
+            print(f"\nWould download {len(files)} track(s) to:\n  {cfg.library_dir}")
+            print("Dry run — nothing downloaded.")
+        else:
+            for f in files:
+                print(f"  {f}")
+            print(f"\nDownloaded {len(files)} track(s) to:\n  {cfg.library_dir}")
+            print("\nNavidrome should pick these up on its next scan cycle.")
+        sys.exit(0)
+    if args.cmd == "radio":
+        problems = config_mod.validate(cfg)
+        if problems:
+            print("config problems (run `starkeep doctor` for details):")
+            for problem in problems:
+                print(f"  - {problem}")
+            sys.exit(1)
+        from . import radio as radio_mod
+        import logging as _logging
+        _logging.basicConfig(level=_logging.INFO,
+                             format="%(asctime)s %(levelname)s %(message)s",
+                             datefmt="%H:%M:%S")
+        try:
+            result = radio_mod.run_radio(cfg, args.seed,
+                                         count=args.count,
+                                         playlist=args.playlist)
+        except Exception as e:
+            print(f"radio build failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(result, indent=2, default=str))
+        print(f"\nPlay the playlist '{result['playlist']}' on shuffle in NaviBeat to keep the music going.")
+        sys.exit(0)
     if args.cmd in ("run", "dry-run"):
         config_mod.ensure_dirs(cfg)
         # the API key only matters when this run will actually download
